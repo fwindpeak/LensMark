@@ -1,4 +1,6 @@
-export type AnalysisMode = 'overview' | 'slanted_edge';
+export type AnalysisMode = 'overview' | 'slanted_edge' | 'photo_quality' | 'lens_performance';
+
+export * from './evaluation';
 
 export interface ROI {
   x: number;

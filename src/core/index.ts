@@ -14,6 +14,8 @@ export * from './lensQuality';
 export * from './autoEdgeDetector';
 export * from './exifReader';
 export * from './rawDecoder';
+export * from './photoQuality';
+export * from './lensPerformance';
 
 /**
  * 执行完整的 ISO 12233 斜边分析管线

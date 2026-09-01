@@ -5,7 +5,6 @@ import {
   HelpCircle,
   Activity,
   ChevronDown,
-  Maximize2,
   Crop,
 } from 'lucide-react';
 import { AnalysisMode } from '../types/mtf';
@@ -138,15 +137,54 @@ export const Header: React.FC<HeaderProps> = ({
             padding: '3px',
             borderRadius: '8px',
             border: '1px solid var(--border-color)',
+            gap: '2px',
           }}
         >
+          <button
+            onClick={() => onModeChange('photo_quality')}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '6px 11px',
+              borderRadius: '6px',
+              border: 'none',
+              fontSize: '12px',
+              fontWeight: 600,
+              cursor: 'pointer',
+              backgroundColor: mode === 'photo_quality' ? 'var(--accent-color)' : 'transparent',
+              color: mode === 'photo_quality' ? '#0b1120' : 'var(--text-muted)',
+              transition: 'all 0.2s',
+            }}
+          >
+            📸 照片质量
+          </button>
+          <button
+            onClick={() => onModeChange('lens_performance')}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '6px 11px',
+              borderRadius: '6px',
+              border: 'none',
+              fontSize: '12px',
+              fontWeight: 600,
+              cursor: 'pointer',
+              backgroundColor: mode === 'lens_performance' ? 'var(--accent-color)' : 'transparent',
+              color: mode === 'lens_performance' ? '#0b1120' : 'var(--text-muted)',
+              transition: 'all 0.2s',
+            }}
+          >
+            🔬 镜头表现
+          </button>
           <button
             onClick={() => onModeChange('overview')}
             style={{
               display: 'flex',
               alignItems: 'center',
               gap: '6px',
-              padding: '6px 12px',
+              padding: '6px 11px',
               borderRadius: '6px',
               border: 'none',
               fontSize: '12px',
@@ -157,8 +195,7 @@ export const Header: React.FC<HeaderProps> = ({
               transition: 'all 0.2s',
             }}
           >
-            <Maximize2 size={13} />
-            🌟 镜头综合质量评估
+            ⚖️ 双维综合
           </button>
           <button
             onClick={() => onModeChange('slanted_edge')}
@@ -166,7 +203,7 @@ export const Header: React.FC<HeaderProps> = ({
               display: 'flex',
               alignItems: 'center',
               gap: '6px',
-              padding: '6px 12px',
+              padding: '6px 11px',
               borderRadius: '6px',
               border: 'none',
               fontSize: '12px',
@@ -178,9 +215,35 @@ export const Header: React.FC<HeaderProps> = ({
             }}
           >
             <Crop size={13} />
-            🔬 专业斜边 MTF 测量
+            斜边 MTF
           </button>
         </div>
+
+        {/* 导入实拍照片后一键调回标板样张快捷按钮 */}
+        {!isSynthetic && (
+          <button
+            onClick={() => onSelectSample(SAMPLE_PRESETS[0])}
+            style={{
+              backgroundColor: 'rgba(56, 189, 248, 0.15)',
+              color: '#38bdf8',
+              border: '1px solid rgba(56, 189, 248, 0.4)',
+              padding: '7px 12px',
+              borderRadius: '8px',
+              fontSize: '12px',
+              fontWeight: 600,
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              transition: 'all 0.2s',
+            }}
+            title="一键重置并载入标准 ISO 12233 测试标板"
+            onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'rgba(56, 189, 248, 0.25)')}
+            onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'rgba(56, 189, 248, 0.15)')}
+          >
+            🎯 调回标板样张
+          </button>
+        )}
 
         {/* 预设样张体验下拉菜单 */}
         <div style={{ position: 'relative' }}>

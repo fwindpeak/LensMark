@@ -1,13 +1,11 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { ROI, HeatmapGrid, DetectedEdge, ZoneMetric, AnalysisMode } from '../types/mtf';
 import {
-  Crop,
   UploadCloud,
   RotateCcw,
   Flame,
   Sliders,
   Crosshair,
-  Maximize2,
 } from 'lucide-react';
 
 interface ImageWorkspaceProps {
@@ -185,9 +183,9 @@ export const ImageWorkspace: React.FC<ImageWorkspaceProps> = ({
       }
     }
 
-    // 4. 斜边测量模式下，绘制暗色遮罩与高亮 ROI 选区
-    if (mode === 'slanted_edge') {
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
+    // 4. 斜边测量模式或照片主体选区模式下，绘制暗色遮罩与高亮 ROI 选区
+    if (mode === 'slanted_edge' || mode === 'photo_quality') {
+      ctx.fillStyle = mode === 'slanted_edge' ? 'rgba(0, 0, 0, 0.45)' : 'rgba(0, 0, 0, 0.25)';
       ctx.fillRect(0, 0, w, h);
 
       const rx = Math.floor(currentRoi.x);
@@ -198,15 +196,30 @@ export const ImageWorkspace: React.FC<ImageWorkspaceProps> = ({
       if (rw > 0 && rh > 0) {
         ctx.drawImage(image, rx, ry, rw, rh, rx, ry, rw, rh);
 
+        const isPhotoQuality = mode === 'photo_quality';
+        const strokeColor = isPhotoQuality ? '#38bdf8' : '#a855f7';
+        const bgColor = isPhotoQuality ? 'rgba(56, 189, 248, 0.12)' : 'rgba(168, 85, 247, 0.15)';
+
         // 选区边框与填充
-        ctx.fillStyle = 'rgba(56, 189, 248, 0.15)';
+        ctx.fillStyle = bgColor;
         ctx.fillRect(rx, ry, rw, rh);
 
-        ctx.strokeStyle = '#38bdf8';
+        ctx.strokeStyle = strokeColor;
         ctx.lineWidth = Math.max(1.5, Math.floor(w / 400));
         ctx.strokeRect(rx, ry, rw, rh);
 
-        // 4 个科技感角标
+        // 选区上方提示小标签
+        const labelText = isPhotoQuality ? '📸 主体清晰度分析选区' : '🔬 ISO 12233 斜边选区';
+        ctx.font = 'bold 11px system-ui, sans-serif';
+        const textW = ctx.measureText(labelText).width;
+        ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
+        ctx.fillRect(rx, Math.max(0, ry - 20), textW + 12, 18);
+        ctx.strokeStyle = strokeColor;
+        ctx.strokeRect(rx, Math.max(0, ry - 20), textW + 12, 18);
+        ctx.fillStyle = '#ffffff';
+        ctx.fillText(labelText, rx + 6, Math.max(13, ry - 7));
+
+        // 4 个角标
         const cornerLen = Math.min(12, Math.min(rw, rh) / 4);
         ctx.strokeStyle = '#ffffff';
         ctx.lineWidth = Math.max(2, ctx.lineWidth + 0.5);
@@ -410,9 +423,23 @@ export const ImageWorkspace: React.FC<ImageWorkspaceProps> = ({
             style={{
               padding: '4px 8px',
               borderRadius: '6px',
-              backgroundColor: mode === 'overview' ? 'rgba(56, 189, 248, 0.15)' : 'rgba(168, 85, 247, 0.15)',
-              color: mode === 'overview' ? 'var(--accent-color)' : '#c084fc',
-              border: `1px solid ${mode === 'overview' ? 'rgba(56, 189, 248, 0.3)' : 'rgba(168, 85, 247, 0.3)'}`,
+              backgroundColor:
+                mode === 'photo_quality'
+                  ? 'rgba(56, 189, 248, 0.15)'
+                  : mode === 'lens_performance'
+                  ? 'rgba(168, 85, 247, 0.15)'
+                  : mode === 'slanted_edge'
+                  ? 'rgba(74, 222, 128, 0.15)'
+                  : 'rgba(56, 189, 248, 0.15)',
+              color:
+                mode === 'photo_quality'
+                  ? '#38bdf8'
+                  : mode === 'lens_performance'
+                  ? '#c084fc'
+                  : mode === 'slanted_edge'
+                  ? '#4ade80'
+                  : 'var(--accent-color)',
+              border: '1px solid rgba(255, 255, 255, 0.1)',
               fontSize: '12px',
               fontWeight: 600,
               display: 'flex',
@@ -420,8 +447,10 @@ export const ImageWorkspace: React.FC<ImageWorkspaceProps> = ({
               gap: '6px',
             }}
           >
-            {mode === 'overview' ? <Maximize2 size={13} /> : <Crop size={13} />}
-            {mode === 'overview' ? '全图像场视口' : '斜边 ROI 测量'}
+            {mode === 'photo_quality' && '📸 照片质量视口 (可框选主体)'}
+            {mode === 'lens_performance' && '🔬 镜头表现视口 (光学归因)'}
+            {mode === 'overview' && '⚖️ 双维综合视口'}
+            {mode === 'slanted_edge' && '📐 斜边 ROI 测量'}
           </div>
 
           {image && (

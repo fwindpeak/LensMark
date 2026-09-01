@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   ROI,
   MTFResult,
@@ -14,11 +14,16 @@ import {
   parsePhotoExif,
   isRawFile,
   decodeRawImage,
+  evaluatePhotoQuality,
+  evaluateLensPerformance,
 } from './core';
+import { PhotoQualityReport as PhotoQualityReportType, LensPerformanceReport as LensPerformanceReportType } from './types/evaluation';
 import { SAMPLE_PRESETS, SamplePreset } from './core/sampleImages';
 import { Header } from './components/Header';
 import { ImageWorkspace } from './components/ImageWorkspace';
 import { LensOverviewPanel } from './components/LensOverviewPanel';
+import { PhotoQualityReport } from './components/PhotoQualityReport';
+import { LensPerformanceReport } from './components/LensPerformanceReport';
 import { MetricsCards } from './components/MetricsCards';
 import { MtfChart } from './components/Charts/MtfChart';
 import { EsfLsfChart } from './components/Charts/EsfLsfChart';
@@ -30,7 +35,8 @@ export const App: React.FC = () => {
   const [image, setImage] = useState<HTMLImageElement | null>(null);
   const [fileName, setFileName] = useState<string>('ISO 12233 标板样张');
   const [isSynthetic, setIsSynthetic] = useState<boolean>(true);
-  const [mode, setMode] = useState<AnalysisMode>('overview');
+  const isSyntheticRef = useRef<boolean>(true);
+  const [mode, setMode] = useState<AnalysisMode>('photo_quality');
 
   // RAW 解码状态
   const [isDecodingRaw, setIsDecodingRaw] = useState<boolean>(false);
@@ -43,7 +49,9 @@ export const App: React.FC = () => {
   // ROI 选区
   const [roi, setRoi] = useState<ROI>({ x: 500, y: 320, w: 200, h: 160 });
 
-  // 分析结果
+  // 双维度分析结果
+  const [photoReport, setPhotoReport] = useState<PhotoQualityReportType | null>(null);
+  const [lensReport, setLensReport] = useState<LensPerformanceReportType | null>(null);
   const [lensResult, setLensResult] = useState<LensQualityResult | null>(null);
   const [detectedEdges, setDetectedEdges] = useState<DetectedEdge[]>([]);
   const [mtfResult, setMtfResult] = useState<MTFResult | null>(null);
@@ -57,10 +65,54 @@ export const App: React.FC = () => {
   // 弹窗说明
   const [isGuideOpen, setIsGuideOpen] = useState<boolean>(false);
 
-  // 全面分析图像 (镜头素质 + 自动斜边扫描 + 当前 ROI MTF)
+  // 全面分析图像 (照片技术质量 + 镜头光学归因 + 自动斜边扫描 + 当前 ROI MTF)
   const processImageAnalysis = useCallback(
-    (img: HTMLImageElement, currentRoi: ROI, parsedExif?: ParsedExifResult | null) => {
-      // 1. 全图镜头光学成像质量评估
+    (img: HTMLImageElement, currentRoi: ROI, parsedExif?: ParsedExifResult | null, isSynth?: boolean) => {
+      const synth = isSynth !== undefined ? isSynth : isSyntheticRef.current;
+      let calculatedMtf: MTFResult | null = null;
+
+      // 1. 当前 ROI 斜边测量
+      try {
+        calculatedMtf = analyzeMtf(img, currentRoi);
+        setMtfResult(calculatedMtf);
+      } catch (err) {
+        console.error('Failed to analyze MTF on ROI:', err);
+      }
+
+      // 2. 照片技术质量评估 (Photo Technical Quality)
+      let photoRes: PhotoQualityReportType | null = null;
+      try {
+        photoRes = evaluatePhotoQuality(
+          img,
+          currentRoi,
+          img.naturalWidth,
+          img.naturalHeight,
+          parsedExif?.overview
+        );
+        setPhotoReport(photoRes);
+      } catch (err) {
+        console.error('Failed to evaluate photo quality:', err);
+      }
+
+      // 3. 镜头光学表现与归因检查 (Lens Optical Performance)
+      if (photoRes) {
+        try {
+          const lensPerf = evaluateLensPerformance(
+            img,
+            photoRes,
+            calculatedMtf,
+            parsedExif,
+            img.naturalWidth,
+            img.naturalHeight,
+            synth
+          );
+          setLensReport(lensPerf);
+        } catch (err) {
+          console.error('Failed to evaluate lens performance:', err);
+        }
+      }
+
+      // 4. 全图镜头光学成像质量热力图与 9 像场
       try {
         const lq = analyzeLensQuality(
           img,
@@ -73,20 +125,12 @@ export const App: React.FC = () => {
         console.error('Failed to analyze lens quality:', err);
       }
 
-      // 2. 自动检测斜边
+      // 5. 自动检测斜边
       try {
         const edges = detectSlantedEdges(img);
         setDetectedEdges(edges);
       } catch (err) {
         console.error('Failed to detect edges:', err);
-      }
-
-      // 3. 当前 ROI 斜边测量
-      try {
-        const res = analyzeMtf(img, currentRoi);
-        setMtfResult(res);
-      } catch (err) {
-        console.error('Failed to analyze MTF on ROI:', err);
       }
     },
     []
@@ -100,7 +144,9 @@ export const App: React.FC = () => {
         setImage(img);
         setFileName(preset.name);
         setIsSynthetic(true);
+        isSyntheticRef.current = true;
         setExifResult(null);
+        setActiveZoneId(null);
 
         const rw = Math.min(220, Math.floor((img.naturalWidth || 800) * 0.3));
         const rh = Math.min(220, Math.floor((img.naturalHeight || 600) * 0.3));
@@ -111,7 +157,7 @@ export const App: React.FC = () => {
           h: rh,
         };
         setRoi(defaultRoi);
-        processImageAnalysis(img, defaultRoi, null);
+        processImageAnalysis(img, defaultRoi, null, true);
       } catch (err) {
         console.error('Failed to load sample preset:', err);
       }
@@ -119,10 +165,10 @@ export const App: React.FC = () => {
     [processImageAnalysis]
   );
 
-  // 初始化加载默认样张 (ISO 12233 标板样张)
+  // 仅在首次挂载时加载默认样张 (ISO 12233 标板样张)
   useEffect(() => {
     loadPreset(SAMPLE_PRESETS[0]);
-  }, [loadPreset]);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 处理本地图片与 RAW 格式照片上传 (包括 LibRaw WebAssembly 解码与 EXIF 全量提取)
   const handleFileUpload = async (file: File) => {
@@ -140,7 +186,9 @@ export const App: React.FC = () => {
         setImage(img);
         setFileName(`${file.name} [RAW]`);
         setIsSynthetic(false);
+        isSyntheticRef.current = false;
         setExifResult(result.exifResult);
+        setActiveZoneId(null);
 
         // 默认居中框选区域
         const rw = Math.min(240, Math.floor(img.naturalWidth * 0.35));
@@ -152,7 +200,7 @@ export const App: React.FC = () => {
           h: rh,
         };
         setRoi(defaultRoi);
-        processImageAnalysis(img, defaultRoi, result.exifResult);
+        processImageAnalysis(img, defaultRoi, result.exifResult, false);
       } catch (err) {
         console.error('Failed to decode RAW file:', err);
         alert(`RAW 格式照片解码失败: ${err instanceof Error ? err.message : '未知错误'}`);
@@ -180,6 +228,8 @@ export const App: React.FC = () => {
         setImage(img);
         setFileName(file.name);
         setIsSynthetic(false);
+        isSyntheticRef.current = false;
+        setActiveZoneId(null);
 
         // 默认居中框选区域
         const rw = Math.min(240, Math.floor(img.naturalWidth * 0.35));
@@ -191,7 +241,7 @@ export const App: React.FC = () => {
           h: rh,
         };
         setRoi(defaultRoi);
-        processImageAnalysis(img, defaultRoi, parsed);
+        processImageAnalysis(img, defaultRoi, parsed, false);
       };
       if (typeof e.target?.result === 'string') {
         img.src = e.target.result;
@@ -204,8 +254,41 @@ export const App: React.FC = () => {
   const handleRoiChange = (newRoi: ROI) => {
     setRoi(newRoi);
     if (image) {
-      const res = analyzeMtf(image, newRoi);
-      setMtfResult(res);
+      // 重新计算 MTF
+      let calculatedMtf: MTFResult | null = null;
+      try {
+        calculatedMtf = analyzeMtf(image, newRoi);
+        setMtfResult(calculatedMtf);
+      } catch (err) {
+        console.error('Failed to update MTF on ROI change:', err);
+      }
+
+      // 重新评估主体区域清晰度
+      try {
+        const updatedPhoto = evaluatePhotoQuality(
+          image,
+          newRoi,
+          image.naturalWidth,
+          image.naturalHeight,
+          exifResult?.overview
+        );
+        setPhotoReport(updatedPhoto);
+
+        if (updatedPhoto) {
+          const updatedLens = evaluateLensPerformance(
+            image,
+            updatedPhoto,
+            calculatedMtf,
+            exifResult,
+            image.naturalWidth,
+            image.naturalHeight,
+            isSyntheticRef.current
+          );
+          setLensReport(updatedLens);
+        }
+      } catch (err) {
+        console.error('Failed to update evaluations on ROI change:', err);
+      }
     }
   };
 
@@ -238,7 +321,7 @@ export const App: React.FC = () => {
       <main
         style={{
           display: 'grid',
-          gridTemplateColumns: 'minmax(0, 1.25fr) minmax(440px, 480px)',
+          gridTemplateColumns: 'minmax(0, 1.25fr) minmax(440px, 500px)',
           gap: '20px',
           padding: '20px 24px',
           flex: 1,
@@ -267,8 +350,21 @@ export const App: React.FC = () => {
 
         {/* 右侧面板 */}
         <aside style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-          {mode === 'overview' ? (
-            /* 模式 1: 全图镜头光学质量评估面板 */
+          {/* 模式 1: 照片技术质量报告 */}
+          {mode === 'photo_quality' && (
+            <PhotoQualityReport report={photoReport} />
+          )}
+
+          {/* 模式 2: 镜头光学表现报告 */}
+          {mode === 'lens_performance' && (
+            <LensPerformanceReport
+              report={lensReport}
+              onSwitchToEdgeRoiMode={() => setMode('slanted_edge')}
+            />
+          )}
+
+          {/* 模式 3: 全图镜头光学质量综合总览与 9 像场 */}
+          {mode === 'overview' && (
             <LensOverviewPanel
               lensResult={lensResult}
               detectedEdges={detectedEdges}
@@ -278,8 +374,10 @@ export const App: React.FC = () => {
               onSwitchToEdgeMode={() => setMode('slanted_edge')}
               onOpenExif={() => setIsExifModalOpen(true)}
             />
-          ) : (
-            /* 模式 2: 专业斜边 MTF / SFR 测量面板 */
+          )}
+
+          {/* 模式 4: 专业斜边 MTF / SFR 测量面板 */}
+          {mode === 'slanted_edge' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
               {/* 返回总览顶部栏 */}
               <div
@@ -291,7 +389,7 @@ export const App: React.FC = () => {
                 }}
               >
                 <button
-                  onClick={() => setMode('overview')}
+                  onClick={() => setMode('photo_quality')}
                   style={{
                     backgroundColor: 'rgba(255, 255, 255, 0.05)',
                     border: '1px solid var(--border-color)',
@@ -308,7 +406,7 @@ export const App: React.FC = () => {
                   onMouseLeave={(e) => (e.currentTarget.style.borderColor = 'var(--border-color)')}
                 >
                   <ArrowLeft size={14} />
-                  返回镜头综合质量总览
+                  返回照片质量报告
                 </button>
 
                 {detectedEdges.length > 0 && (
