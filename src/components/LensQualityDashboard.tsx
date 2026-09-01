@@ -138,9 +138,9 @@ export const LensQualityDashboard: React.FC<LensQualityDashboardProps> = ({
         <div
           style={{
             display: 'grid',
-            gridTemplateColumns: 'repeat(3, 1fr)',
-            gap: '10px',
-            marginTop: '16px',
+            gridTemplateColumns: 'repeat(4, 1fr)',
+            gap: '8px',
+            marginTop: '14px',
             paddingTop: '12px',
             borderTop: '1px solid var(--border-subtle)',
           }}
@@ -148,7 +148,7 @@ export const LensQualityDashboard: React.FC<LensQualityDashboardProps> = ({
           <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
             <span style={{ fontSize: '11px', color: 'var(--text-dim)' }}>中心锐度</span>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: '4px' }}>
-              <span style={{ fontSize: '18px', fontWeight: 800, color: 'var(--accent-color)' }}>
+              <span style={{ fontSize: '17px', fontWeight: 800, color: 'var(--accent-color)' }}>
                 {centerSharpness}
               </span>
               <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>分</span>
@@ -158,7 +158,7 @@ export const LensQualityDashboard: React.FC<LensQualityDashboardProps> = ({
           <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
             <span style={{ fontSize: '11px', color: 'var(--text-dim)' }}>边角平均锐度</span>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: '4px' }}>
-              <span style={{ fontSize: '18px', fontWeight: 800, color: '#e2e8f0' }}>
+              <span style={{ fontSize: '17px', fontWeight: 800, color: '#e2e8f0' }}>
                 {cornerAvgSharpness}
               </span>
               <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>分</span>
@@ -166,11 +166,11 @@ export const LensQualityDashboard: React.FC<LensQualityDashboardProps> = ({
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-            <span style={{ fontSize: '11px', color: 'var(--text-dim)' }}>边角解析衰减率</span>
+            <span style={{ fontSize: '11px', color: 'var(--text-dim)' }}>边角衰减率</span>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: '4px' }}>
               <span
                 style={{
-                  fontSize: '18px',
+                  fontSize: '17px',
                   fontWeight: 800,
                   color: edgeFalloffPct <= 20 ? 'var(--success-color)' : edgeFalloffPct <= 35 ? 'var(--warning-color)' : 'var(--danger-color)',
                 }}
@@ -178,8 +178,24 @@ export const LensQualityDashboard: React.FC<LensQualityDashboardProps> = ({
                 {edgeFalloffPct}%
               </span>
               <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
-                {edgeFalloffPct <= 20 ? '(微弱)' : edgeFalloffPct <= 35 ? '(适中)' : '(显著)'}
+                {edgeFalloffPct <= 20 ? '(微弱)' : edgeFalloffPct <= 35 ? '(适中)' : '(明显)'}
               </span>
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+            <span style={{ fontSize: '11px', color: 'var(--text-dim)' }}>底噪与信噪比</span>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: '4px' }}>
+              <span
+                style={{
+                  fontSize: '17px',
+                  fontWeight: 800,
+                  color: result.snrDb >= 32 ? 'var(--success-color)' : result.snrDb >= 24 ? 'var(--warning-color)' : 'var(--danger-color)',
+                }}
+              >
+                {result.snrDb}
+              </span>
+              <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>dB · {result.noiseLevel}</span>
             </div>
           </div>
         </div>

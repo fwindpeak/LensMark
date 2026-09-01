@@ -41,7 +41,7 @@ export const GuideModal: React.FC<GuideModalProps> = ({ isOpen, onClose }) => {
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             <BookOpen size={20} color="var(--accent-color)" />
             <h2 style={{ fontSize: '18px', fontWeight: 700, color: '#fff', margin: 0 }}>
-              镜头光学画质评估与 ISO 12233 测量原理指南
+              LensMark 镜头光学画质评估与 ISO 12233 测量原理指南
             </h2>
           </div>
           <button
@@ -64,19 +64,20 @@ export const GuideModal: React.FC<GuideModalProps> = ({ isOpen, onClose }) => {
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px' }}>
               <Sparkles size={16} color="var(--accent-color)" />
               <h3 style={{ fontSize: '14px', fontWeight: 600, color: '#fff', margin: 0 }}>
-                一、全图光学画质诊断（真实光学 MTF 与去过冲校准）
+                一、全图光学画质诊断（真实光学相干性与稳健去噪）
               </h3>
             </div>
             <p>
               针对摄影师日常评估镜头成像需求，系统无需拍摄专用测试图。只需导入任意实拍样张（风景、人像、建筑或分辨率砖墙），系统即刻执行：
             </p>
             <ul style={{ paddingLeft: '20px', marginTop: '6px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
-              <li><strong>九宫格像场解析力矩阵</strong>：测量中心区域（Center 0~30% 像场）与四角边缘（70~100% 像场）高频能量。</li>
-              <li><strong>ISO 12233 边缘过冲与机内锐化校准 (Overshoot Debias)</strong>：检测手机 ISP 的计算摄影强锐化白边（过冲峰），自动剥除非光学人工增益，还原镜头真实光学解析力。</li>
-              <li><strong>显著纹理掩模 (Salient Masking)</strong>：自动识别并聚焦在有效纹理/景深对焦区，避免因边角包含平坦天空、纯色或虚化散景（Bokeh）而误判镜头素质。</li>
-              <li><strong>总画面解析力 (LW/PH)</strong>：结合原生传感器像素规模，真实呈现全画幅高像素与大底镜头的细节容量。</li>
-              <li><strong>色散与紫边 (CA)</strong>：分析高反差边界 R-G 与 B-G 通道亚像素错位与紫边比例。</li>
-              <li><strong>暗角与相对照度</strong>：评估四角相对中心的光照衰减与 EV 损失。</li>
+              <li><strong>结构张量相干性去噪 (Structure Tensor Coherence)</strong>：严格鉴别具有空间方向连续性的真实光学边缘，彻底过滤随机高频噪点与散粒噪声，杜绝高噪点/老手机马赛克照片产生虚假高锐度。</li>
+              <li><strong>MAD 稳健噪声估计与 SNR 量化</strong>：采用中位数绝对偏差计算传感器真实噪声标准差与信噪比 (dB)，自动对噪点污染实施画质惩罚。</li>
+              <li><strong>JPEG 8x8 块效应检测与抑制</strong>：检测重度压缩与马赛克伪影，滤除网格跳变带来的虚假边缘。</li>
+              <li><strong>物理分辨率标定与封顶 (Resolution Constraints)</strong>：结合原生传感器像素规模严格标定 LW/PH，杜绝低像素老设备得到不切实际的高分。</li>
+              <li><strong>九宫格像场解析力矩阵与门控一致性</strong>：对比中心与四角像场，以中心有效锐度为门控计算边缘衰减率。</li>
+              <li><strong>ISO 12233 边缘过冲校准 (Overshoot Debias)</strong>：检测手机 ISP 的计算摄影强锐化白边，剥除非光学人工增益。</li>
+              <li><strong>色散紫边 (CA) 与暗角 (Vignetting)</strong>：计算亚像素错位与边角 EV 损失。</li>
             </ul>
           </div>
 

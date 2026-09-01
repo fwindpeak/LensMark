@@ -10,8 +10,9 @@ import { ExifOverview } from '../types/exif';
 
 /**
  * 分析整张图片的镜头光学成像质量与分辨率
- * 结合真实光学 MTF、ISO 12233 边缘过冲检测 (Overshoot Debias)、
- * 显著特征掩模 (Salient Texture Masking) 与总画面解析力 (LW/PH)
+ * 结合真实光学结构相干性 (Structure Tensor Coherence)、
+ * MAD 稳健噪声与信噪比 (SNR) 估计、JPEG 8x8 块效应/马赛克检测、
+ * 物理分辨率硬性上限标定与 ISO 12233 边缘去过冲 (Overshoot Debias)
  */
 export function analyzeLensQuality(
   imageSource: CanvasImageSource,
@@ -30,7 +31,7 @@ export function analyzeLensQuality(
     (imageSource as HTMLImageElement).height ||
     600;
 
-  // 1. 创建高分辨率工作画布 (上限 2048px，保留充足的高频微观纹理与边缘跃迁剖面)
+  // 1. 创建高分辨率工作画布 (上限 2048px，保留充足的高频微观纹理与边缘剖面)
   const maxDim = 2048;
   let sampleW = nativeW;
   let sampleH = nativeH;
@@ -58,6 +59,7 @@ export function analyzeLensQuality(
   const gChan = new Float32Array(sampleW * sampleH);
   const bChan = new Float32Array(sampleW * sampleH);
 
+  let meanLuminance = 0;
   for (let i = 0, j = 0; i < data.length; i += 4, j++) {
     const r = data[i];
     const g = data[i + 1];
@@ -66,20 +68,47 @@ export function analyzeLensQuality(
     gChan[j] = g;
     bChan[j] = b;
     // Rec. 709 亮度公式
-    gray[j] = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    gray[j] = lum;
+    meanLuminance += lum;
   }
+  meanLuminance /= Math.max(1, sampleW * sampleH);
 
-  // 3. 估计画面噪点底噪 (Noise Floor)，避免高 ISO 噪点误判为锐度
-  const noiseFloor = estimateNoiseFloor(gray, sampleW, sampleH);
+  // 3. 稳健估算噪声底噪 (MAD Robust Noise Estimation) 与信噪比 (SNR dB)
+  const { noiseSigma, snrDb, noiseLevel } = estimateNoiseAndSnr(
+    gray,
+    sampleW,
+    sampleH,
+    meanLuminance
+  );
 
-  // 4. ISO 12233 边缘过冲与机内锐化 (Overshoot / Undershoot) 探查
+  // 4. JPEG 8x8 块效应与马赛克伪影强度检测 (Blockiness)
+  const blockinessPct = detectJpegBlockiness(gray, sampleW, sampleH);
+
+  // 5. ISO 12233 边缘过冲与机内锐化 (Overshoot / Undershoot) 探查
   const { overshootPct, isOversharpened } = detectEdgeOvershoot(
     gray,
     sampleW,
     sampleH
   );
 
-  // 5. 分块网格分析 (Grid 24x24) 与显著纹理掩模
+  // 6. 原生物理分辨率与信息承载力判定
+  const nativeMegapixels = (nativeW * nativeH) / 1_000_000;
+  const isResolutionLimited = nativeMegapixels < 2.5 || Math.min(nativeW, nativeH) < 1000;
+
+  // 根据物理像素数确定清晰度天花板 (杜绝 30万像素老手机得到高分)
+  let maxResolutionCap = 100;
+  if (nativeMegapixels < 0.6) {
+    maxResolutionCap = 48; // 极低清/老旧功能机 (如 640x480) 封顶 D 级
+  } else if (nativeMegapixels < 1.2) {
+    maxResolutionCap = 58; // 低清缩略图/老手机 (如 1024x768) 封顶 D 级~低 C 级
+  } else if (nativeMegapixels < 2.5) {
+    maxResolutionCap = 72; // 早期 200万像素手机 封顶 B 级以下
+  } else if (nativeMegapixels < 5.0) {
+    maxResolutionCap = 84; // 主流 500万像素 封顶 A 级以下
+  }
+
+  // 7. 分块网格分析 (Grid 24x24) 与结构张量相干性加权
   const gridCols = 24;
   const gridRows = 24;
   const heatmapData = new Float32Array(gridCols * gridRows);
@@ -100,6 +129,7 @@ export function analyzeLensQuality(
   let globalMinSharpness = Infinity;
   let totalTexturedBlocks = 0;
 
+  // 预先计算 Sobel 梯度与结构张量相干性，彻底过滤随机高频白噪声
   for (let r = 0; r < gridRows; r++) {
     for (let c = 0; c < gridCols; c++) {
       const startX = Math.floor(c * blockW);
@@ -107,7 +137,8 @@ export function analyzeLensQuality(
       const startY = Math.floor(r * blockH);
       const endY = Math.floor((r + 1) * blockH);
 
-      let tenenSum = 0;
+      let coherentGradSum = 0;
+      let rawTenenSum = 0;
       let lapSum = 0;
       let count = 0;
       let lumSum = 0;
@@ -115,7 +146,6 @@ export function analyzeLensQuality(
       let minLum = 255;
       let maxLum = 0;
 
-      // 提取局部梯度与方差
       for (let y = Math.max(1, startY); y < Math.min(sampleH - 1, endY); y++) {
         const row = y * sampleW;
         for (let x = Math.max(1, startX); x < Math.min(sampleW - 1, endX); x++) {
@@ -141,14 +171,27 @@ export function analyzeLensQuality(
               2 * gray[row - sampleW + x] +
               gray[row - sampleW + (x + 1)]);
 
-          const gVal = Math.sqrt(gx * gx + gy * gy);
-          // 减去噪点底噪
-          const cleanGrad = Math.max(0, gVal - noiseFloor * 1.5);
-          if (cleanGrad > 4) {
-            tenenSum += cleanGrad * cleanGrad;
+          const gMag = Math.sqrt(gx * gx + gy * gy);
+          rawTenenSum += gMag * gMag;
+
+          // 结构张量相干性 (Structure Tensor Coherence):
+          // 光学边缘有明显的空间方向一致性，随机噪点/白杂讯在局部各向同性
+          const jxx = gx * gx;
+          const jyy = gy * gy;
+          const jxy = gx * gy;
+          const trace = jxx + jyy + 1e-4;
+          const coherence = ((jxx - jyy) ** 2 + 4 * (jxy ** 2)) / (trace ** 2);
+
+          // 只有具备结构相干性且超过噪声门限的才被识别为有效光学细节
+          const noiseThreshold = Math.max(4.0, noiseSigma * 2.2);
+          if (gMag > noiseThreshold) {
+            const cleanGrad = gMag - noiseThreshold;
+            // 相干性因子压制随机无方向噪点
+            const coherentWeight = Math.pow(Math.max(0, coherence), 1.2);
+            coherentGradSum += cleanGrad * coherentWeight;
           }
 
-          // 8-邻域 Laplacian 纹理算子
+          // 8-邻域 Laplacian 纹理算子 (去噪处理)
           const lap = Math.abs(
             8 * val -
               gray[row - sampleW + (x - 1)] -
@@ -160,37 +203,50 @@ export function analyzeLensQuality(
               gray[row + sampleW + x] -
               gray[row + sampleW + (x + 1)]
           );
-          const cleanLap = Math.max(0, lap - noiseFloor * 2.0);
+          const cleanLap = Math.max(0, lap - noiseSigma * 2.5);
           lapSum += cleanLap;
           count++;
         }
       }
 
-      const meanTenen = count > 0 ? tenenSum / count : 0;
+      const meanCoherent = count > 0 ? coherentGradSum / count : 0;
       const meanLap = count > 0 ? lapSum / count : 0;
+      const meanRawTenen = count > 0 ? rawTenenSum / count : 0;
       const variance =
         count > 0 ? Math.max(0, lumSqSum / count - (lumSum / count) ** 2) : 0;
       const contrast = maxLum - minLum;
 
-      // 判断该网格是否包含有效结构/焦点纹理 (区分真实边缘 vs 平坦天空/纯色/死黑/死白)
-      const hasTexture = contrast > 18 && variance > 12 && meanLap > 1.2;
+      // 准确判断该网格是否包含真实光学纹理 (排除纯平坦区与纯噪点区)
+      // 若噪点很大，方差虽然很高但 meanCoherent 会很小
+      const hasTexture =
+        contrast > 16 &&
+        variance > Math.max(10, noiseSigma * 1.5) &&
+        meanCoherent > 1.2 &&
+        meanLap > 0.8;
+
       if (hasTexture) {
         totalTexturedBlocks++;
       }
 
-      // 计算去过冲后的真实光学清晰度指标
-      let rawSharp = Math.sqrt(meanTenen) * 0.65 + meanLap * 0.35;
+      // 计算去噪和相干性加权后的光学清晰度指标
+      let rawSharp = meanCoherent * 1.4 + meanLap * 0.4;
 
-      // 如果检测到手机/ISP 机内过冲锐化，校准压制虚高梯度
+      // 如果检测到手机/ISP 机内过冲锐化，校准压制虚高白边
       if (isOversharpened && overshootPct > 10) {
-        const debiasFactor = Math.max(0.4, 1.0 - (overshootPct - 10) * 0.015);
+        const debiasFactor = Math.max(0.35, 1.0 - (overshootPct - 10) * 0.02);
         rawSharp *= debiasFactor;
+      }
+
+      // 如果检测到严重 JPEG 8x8 块效应/马赛克，压制假边缘
+      if (blockinessPct > 12) {
+        const blockDebias = Math.max(0.4, 1.0 - (blockinessPct - 12) * 0.02);
+        rawSharp *= blockDebias;
       }
 
       heatmapData[r * gridCols + c] = rawSharp;
       blockStats.push({
         sharpness: rawSharp,
-        tenengrad: meanTenen,
+        tenengrad: meanRawTenen,
         laplacian: meanLap,
         variance,
         hasTexture,
@@ -220,13 +276,13 @@ export function analyzeLensQuality(
     maxVal: Math.round(globalMaxSharpness * 10) / 10,
   };
 
-  // 全图纹理置信度 (0~100%)
+  // 全图有效纹理置信度 (0~100%)
   const textureConfidence = Math.min(
     100,
-    Math.round((totalTexturedBlocks / (gridCols * gridRows * 0.4)) * 100)
+    Math.round((totalTexturedBlocks / (gridCols * gridRows * 0.35)) * 100)
   );
 
-  // 6. 9 个标准像场分区评估 (中心、4 角、4 边)
+  // 8. 9 个标准像场分区评估 (中心、4 角、4 边)
   const scaleX = nativeW / sampleW;
   const scaleY = nativeH / sampleH;
 
@@ -327,20 +383,19 @@ export function analyzeLensQuality(
   for (let r = Math.floor(gridRows * 0.3); r < Math.floor(gridRows * 0.7); r++) {
     for (let c = Math.floor(gridCols * 0.3); c < Math.floor(gridCols * 0.7); c++) {
       const stat = blockStats[r * gridCols + c];
-      if (stat.hasTexture || stat.sharpness > 2) {
+      if (stat.hasTexture || stat.sharpness > 0.8) {
         centerValues.push(stat.sharpness);
       }
     }
   }
-  // 取中心区域前 30% 最清晰显著纹理作为光学基准
   centerValues.sort((a, b) => b - a);
   const centerTopN = Math.max(1, Math.floor(centerValues.length * 0.35));
   const centerSalientMean =
     centerValues.length > 0
       ? centerValues.slice(0, centerTopN).reduce((a, b) => a + b, 0) / centerTopN
-      : 8.0;
+      : 2.0;
 
-  // 7. 计算各分区的显著锐度 (Salient Percentile Sharpness)
+  // 9. 计算各分区的显著锐度 (Salient Percentile Sharpness)
   const zones: ZoneMetric[] = zoneConfigs.map((cfg) => {
     const zoneValues: number[] = [];
     let textureCount = 0;
@@ -362,9 +417,9 @@ export function analyzeLensQuality(
     }
 
     zoneValues.sort((a, b) => b - a);
-    const hasValidTexture = textureCount >= Math.max(1, totalInZone * 0.15);
+    const hasValidTexture = textureCount >= Math.max(1, totalInZone * 0.12);
 
-    // 取该区域前 30% 显著特征值
+    // 取该区域前 30% 显著光学特征值
     const topCount = Math.max(1, Math.floor(zoneValues.length * 0.3));
     const salientAvg =
       zoneValues.slice(0, topCount).reduce((a, b) => a + b, 0) / topCount;
@@ -372,24 +427,41 @@ export function analyzeLensQuality(
     // 区域与中心的相对光学解析比率
     const ratioToCenter = salientAvg / Math.max(1e-4, centerSalientMean);
 
-    // 综合打分：结合绝对微观反差 (Acutance) 与全场一致性
-    // 若该区域缺乏纹理（例如四角是纯天空或虚化散景），自适应避免过分扣分
     let score: number;
     if (cfg.id === 'center') {
-      // 中心锐度评分
-      score = calculateAcutanceScore(salientAvg, isOversharpened, nativeH);
+      score = calculateAcutanceScore(
+        salientAvg,
+        isOversharpened,
+        nativeH,
+        nativeMegapixels,
+        maxResolutionCap
+      );
     } else {
       if (hasValidTexture) {
-        const rawScore = calculateAcutanceScore(salientAvg, isOversharpened, nativeH);
-        score = Math.round(rawScore * 0.5 + Math.min(100, ratioToCenter * 85) * 0.5);
-      } else {
-        // 无纹理/散景区：根据全场平均和中心光学基准进行软性推算，防止被天空/虚化误杀
-        score = Math.round(
-          Math.max(50, calculateAcutanceScore(centerSalientMean * 0.78, isOversharpened, nativeH))
+        const rawScore = calculateAcutanceScore(
+          salientAvg,
+          isOversharpened,
+          nativeH,
+          nativeMegapixels,
+          maxResolutionCap
         );
+        score = Math.round(
+          rawScore * 0.6 +
+            Math.min(maxResolutionCap, ratioToCenter * 80) * 0.4
+        );
+      } else {
+        // 无纹理/散景区：根据中心光学基准进行软性推算，防止被天空/虚化误判
+        const softCenter = calculateAcutanceScore(
+          centerSalientMean * 0.75,
+          isOversharpened,
+          nativeH,
+          nativeMegapixels,
+          maxResolutionCap
+        );
+        score = Math.round(Math.max(30, softCenter * 0.85));
       }
     }
-    score = Math.max(10, Math.min(100, score));
+    score = Math.max(10, Math.min(maxResolutionCap, score));
 
     const roi: ROI = {
       x: Math.round(cfg.cMin * blockW * scaleX),
@@ -413,10 +485,17 @@ export function analyzeLensQuality(
     };
   });
 
-  // 8. 色散 (Chromatic Aberration) 与紫边分析
-  const caResult = calculateChromaticAberration(rChan, gChan, bChan, sampleW, sampleH);
+  // 10. 色散 (Chromatic Aberration) 与紫边分析
+  const caResult = calculateChromaticAberration(
+    rChan,
+    gChan,
+    bChan,
+    sampleW,
+    sampleH,
+    noiseSigma
+  );
 
-  // 9. 暗角与相对照度 (Vignetting Profile)
+  // 11. 暗角与相对照度 (Vignetting Profile)
   const vigResult = calculateVignetting(gray, sampleW, sampleH);
 
   // 补充各分区色散与照度
@@ -433,7 +512,7 @@ export function analyzeLensQuality(
     }
   });
 
-  // 10. 计算中心锐度、边角平均锐度与衰减率
+  // 12. 计算中心锐度、边角平均锐度与衰减率
   const centerZone = zones.find((z) => z.id === 'center')!;
   const cornerZones = zones.filter((z) =>
     ['top_left', 'top_right', 'bottom_left', 'bottom_right'].includes(z.id)
@@ -450,23 +529,38 @@ export function analyzeLensQuality(
     )
   );
 
-  // 11. 估算全图总画面解析力 (LW/PH, Line Widths per Picture Height)
-  // 结合原生图像高度像素数与 MTF50 等效响应
-  const nativeMegapixels = (nativeW * nativeH) / 1_000_000;
-  const baseLwphFactor = (centerSharpness / 100) * 0.72; // 等效 MTF50 占奈奎斯特频率比率
+  // 13. 估算全图总画面解析力 (LW/PH, Line Widths per Picture Height)
+  const baseLwphFactor = (centerSharpness / 100) * 0.70;
   let lwphEstimate = Math.round(baseLwphFactor * nativeH * 2);
   if (isOversharpened) {
-    // 扣除非光学计算锐化带来的虚高 LW/PH
-    lwphEstimate = Math.round(lwphEstimate * 0.75);
+    lwphEstimate = Math.round(lwphEstimate * 0.78);
+  }
+  if (isResolutionLimited) {
+    lwphEstimate = Math.min(lwphEstimate, Math.round(nativeH * 1.5));
   }
 
-  // 12. 综合光学评分体系 (0~100)
-  // 权重：中心光学解析度 35% + 边角衰减控制 25% + 总画面分辨率/细节量 20% + 色散 10% + 暗角 10%
-  const falloffScore = Math.max(0, 100 - edgeFalloffPct * 1.2);
-  
-  // 画面像素解析力加成 (如 45MP 相机具备巨大光学信息量)
-  const resolutionBonus = Math.min(100, Math.max(40, 50 + Math.log2(Math.max(1, nativeMegapixels / 12)) * 15));
-  
+  // 14. 综合光学评分体系 (0~100)
+  // 门控一致性评分：杜绝“中心和四角都烂得很均匀，结果一致性拿满 100 分”的漏洞
+  const rawFalloffScore = Math.max(0, 100 - edgeFalloffPct * 1.25);
+  const centerQualityGate = Math.max(0.2, centerSharpness / 100);
+  const falloffScore = Math.round(rawFalloffScore * centerQualityGate + (1 - centerQualityGate) * centerSharpness);
+
+  // 物理像素规模与解析力承载分 (0~100)
+  let resolutionScore = 50;
+  if (nativeMegapixels >= 24) {
+    resolutionScore = 98; // 2400万像素及以上专业全画幅/高像素
+  } else if (nativeMegapixels >= 12) {
+    resolutionScore = 88; // 1200~2400万像素主流
+  } else if (nativeMegapixels >= 6) {
+    resolutionScore = 75;
+  } else if (nativeMegapixels >= 2.5) {
+    resolutionScore = 60;
+  } else if (nativeMegapixels >= 1.0) {
+    resolutionScore = 40;
+  } else {
+    resolutionScore = 20; // < 100万像素老手机
+  }
+
   const caScore =
     caResult.averageCaPx < 0.6
       ? 95
@@ -477,43 +571,66 @@ export function analyzeLensQuality(
       : 40;
   const vigScore = Math.min(100, Math.max(40, vigResult.relativeIlluminationPct));
 
+  // 基础加权合成：中心 35% + 像场一致性 25% + 物理分辨率承载 20% + 色散 10% + 暗角 10%
   let rawOverallScore =
     centerSharpness * 0.35 +
     falloffScore * 0.25 +
-    resolutionBonus * 0.20 +
+    resolutionScore * 0.20 +
     caScore * 0.10 +
     vigScore * 0.10;
 
-  // 惩罚机内过度数字锐化
-  if (isOversharpened && overshootPct > 15) {
-    const penalty = Math.min(18, (overshootPct - 15) * 0.6);
-    rawOverallScore = Math.max(40, rawOverallScore - penalty);
+  // 15. 画质劣化惩罚：高噪声、JPEG 重度马赛克与过度计算锐化
+  let totalPenalty = 0;
+
+  // (1) 噪声 / 杂讯重度惩罚
+  if (snrDb < 20 || noiseSigma > 12) {
+    totalPenalty += 28; // 极高杂讯
+  } else if (snrDb < 26 || noiseSigma > 8) {
+    totalPenalty += 18; // 重度噪点
+  } else if (snrDb < 32 || noiseSigma > 5) {
+    totalPenalty += 8; // 中等噪点
   }
 
-  const overallScore = Math.round(rawOverallScore);
+  // (2) JPEG 8x8 块效应/马赛克惩罚
+  if (blockinessPct > 20) {
+    totalPenalty += 20; // 严重马赛克/重压缩
+  } else if (blockinessPct > 12) {
+    totalPenalty += 10;
+  }
+
+  // (3) 机内过冲计算锐化白边惩罚
+  if (isOversharpened && overshootPct > 15) {
+    const sharpPenalty = Math.min(16, (overshootPct - 15) * 0.6);
+    totalPenalty += sharpPenalty;
+  }
+
+  rawOverallScore = Math.max(15, rawOverallScore - totalPenalty);
+
+  // 施加最高物理像素分辨率硬封顶 (Cap)
+  const finalScore = Math.min(maxResolutionCap, Math.round(rawOverallScore));
 
   let gradeLevel: LensQualityResult['gradeLevel'] = 'B';
-  let gradeTitle = '良好 (成像均衡)';
-  if (overallScore >= 90) {
+  let gradeTitle = '良好 (主流均衡)';
+  if (finalScore >= 90) {
     gradeLevel = 'S';
     gradeTitle = '卓越 (旗舰级光学素质)';
-  } else if (overallScore >= 80) {
+  } else if (finalScore >= 80) {
     gradeLevel = 'A';
     gradeTitle = '优秀 (高分辨率锐利)';
-  } else if (overallScore >= 70) {
+  } else if (finalScore >= 70) {
     gradeLevel = 'B';
     gradeTitle = '良好 (主流均衡)';
-  } else if (overallScore >= 60) {
+  } else if (finalScore >= 55) {
     gradeLevel = 'C';
-    gradeTitle = '普通 (边缘软化/存在色散)';
+    gradeTitle = '普通 (边缘软化/存在噪点或色散)';
   } else {
     gradeLevel = 'D';
-    gradeTitle = '偏软 (解析力较低)';
+    gradeTitle = '偏低 (低解析力/高噪点/低像素限制)';
   }
 
-  // 13. 生成智能光学诊断结论与拍摄建议
+  // 16. 生成智能光学诊断结论与拍摄建议
   const { diagnosisSummary, recommendations } = generateDiagnosis(
-    overallScore,
+    finalScore,
     centerSharpness,
     cornerAvgSharpness,
     edgeFalloffPct,
@@ -524,11 +641,15 @@ export function analyzeLensQuality(
     lwphEstimate,
     textureConfidence,
     nativeMegapixels,
+    snrDb,
+    noiseLevel,
+    blockinessPct,
+    isResolutionLimited,
     exif
   );
 
   return {
-    overallScore,
+    overallScore: finalScore,
     gradeLevel,
     gradeTitle,
     centerSharpness,
@@ -538,6 +659,11 @@ export function analyzeLensQuality(
     isOversharpened,
     lwphEstimate,
     textureConfidence,
+    snrDb: Math.round(snrDb * 10) / 10,
+    noiseLevel,
+    blockinessPct: Math.round(blockinessPct * 10) / 10,
+    resolutionMegapixels: Math.round(nativeMegapixels * 10) / 10,
+    isResolutionLimited,
     zones,
     chromaticAberration: caResult,
     vignetting: vigResult,
@@ -548,50 +674,149 @@ export function analyzeLensQuality(
 }
 
 /**
- * 依据微观清晰度梯度值映射到光学锐度分 (0~100)
+ * 依据微观相干能量与物理像素尺度映射到光学锐度分 (0~100)
  */
 function calculateAcutanceScore(
-  salientEnergy: number,
+  coherentEnergy: number,
   isOversharpened: boolean,
-  nativeHeight: number
+  nativeHeight: number,
+  megapixels: number,
+  maxCap: number
 ): number {
-  // 基础光学响应曲线 (对数压缩防爆表)
-  let baseScore = 20 + Math.log1p(salientEnergy / 2.5) * 32;
-  
-  // 考虑原图物理像素尺度 (高像素原生解析力更强)
-  if (nativeHeight >= 3000) {
+  // 基于对数压缩的光学相干响应曲线
+  let baseScore = 15 + Math.log1p(coherentEnergy * 1.8) * 28;
+
+  // 结合物理像素高度与信息量校准
+  if (nativeHeight >= 3000 && megapixels >= 18) {
     baseScore += 6;
-  } else if (nativeHeight <= 1200) {
-    baseScore -= 4;
+  } else if (nativeHeight >= 2000 && megapixels >= 8) {
+    baseScore += 2;
+  } else if (nativeHeight <= 1000 || megapixels < 2.0) {
+    baseScore -= 12;
+  } else if (nativeHeight <= 600 || megapixels < 0.8) {
+    baseScore -= 24;
   }
 
   if (isOversharpened) {
     baseScore -= 6;
   }
 
-  return Math.round(Math.min(98, Math.max(15, baseScore)));
+  return Math.round(Math.min(maxCap, Math.max(10, baseScore)));
 }
 
 /**
- * 估计平坦区域的噪点底噪
+ * 基于中位数绝对偏差 (MAD) 估算稳健高频噪声标准差与 SNR (dB)
+ * Donoho & Johnstone 稳健噪声估计算法：sigma = median(|Laplacian|) / 0.6745
  */
-function estimateNoiseFloor(gray: Float32Array, w: number, h: number): number {
-  let lowGradSum = 0;
-  let count = 0;
-  const step = 8;
+function estimateNoiseAndSnr(
+  gray: Float32Array,
+  w: number,
+  h: number,
+  meanLum: number
+): {
+  noiseSigma: number;
+  snrDb: number;
+  noiseLevel: '极低噪点' | '正常低噪' | '中等噪点' | '重度高噪' | '极高杂讯';
+} {
+  const lapResiduals: number[] = [];
+  const step = 4;
 
-  for (let y = 10; y < h - 10; y += step) {
+  for (let y = 4; y < h - 4; y += step) {
     const row = y * w;
-    for (let x = 10; x < w - 10; x += step) {
-      const g = Math.abs(gray[row + (x + 1)] - gray[row + (x - 1)]);
-      if (g < 15) {
-        lowGradSum += g;
-        count++;
+    for (let x = 4; x < w - 4; x += step) {
+      // 标准拉普拉斯高通滤波残差
+      // [ 1, -2,  1]
+      // [-2,  4, -2]
+      // [ 1, -2,  1]
+      const nVal =
+        gray[row - w + (x - 1)] -
+        2 * gray[row - w + x] +
+        gray[row - w + (x + 1)] -
+        2 * gray[row + (x - 1)] +
+        4 * gray[row + x] -
+        2 * gray[row + (x + 1)] +
+        gray[row + w + (x - 1)] -
+        2 * gray[row + w + x] +
+        gray[row + w + (x + 1)];
+
+      lapResiduals.push(Math.abs(nVal));
+    }
+  }
+
+  if (lapResiduals.length === 0) {
+    return { noiseSigma: 2.0, snrDb: 40, noiseLevel: '极低噪点' };
+  }
+
+  lapResiduals.sort((a, b) => a - b);
+  // 取中位数 (MAD)
+  const medianVal = lapResiduals[Math.floor(lapResiduals.length * 0.5)];
+  // 归一化系数：sqrt(36) * 0.6745 = 4.047
+  const noiseSigma = Math.max(0.5, medianVal / 4.047);
+
+  // 信噪比计算 (dB)
+  const signal = Math.max(10, meanLum);
+  const snrDb = Math.min(60, Math.max(10, 20 * Math.log10(signal / noiseSigma)));
+
+  let noiseLevel: '极低噪点' | '正常低噪' | '中等噪点' | '重度高噪' | '极高杂讯' = '正常低噪';
+  if (snrDb >= 38 && noiseSigma <= 2.2) {
+    noiseLevel = '极低噪点';
+  } else if (snrDb >= 30 && noiseSigma <= 5.0) {
+    noiseLevel = '正常低噪';
+  } else if (snrDb >= 24 && noiseSigma <= 8.5) {
+    noiseLevel = '中等噪点';
+  } else if (snrDb >= 18 || noiseSigma <= 14.0) {
+    noiseLevel = '重度高噪';
+  } else {
+    noiseLevel = '极高杂讯';
+  }
+
+  return {
+    noiseSigma,
+    snrDb,
+    noiseLevel,
+  };
+}
+
+/**
+ * 探测 JPEG 8x8 块效应与数字马赛克伪影强度
+ */
+function detectJpegBlockiness(
+  gray: Float32Array,
+  w: number,
+  h: number
+): number {
+  let gridGradSum = 0;
+  let gridCount = 0;
+  let nonGridGradSum = 0;
+  let nonGridCount = 0;
+
+  const step = 2;
+  for (let y = 8; y < h - 8; y += step) {
+    const row = y * w;
+    const isYGrid = y % 8 === 0;
+    for (let x = 8; x < w - 8; x += step) {
+      const isXGrid = x % 8 === 0;
+      const gx = Math.abs(gray[row + (x + 1)] - gray[row + (x - 1)]);
+      const gy = Math.abs(gray[row + w + x] - gray[row - w + x]);
+
+      if (isXGrid || isYGrid) {
+        gridGradSum += gx + gy;
+        gridCount++;
+      } else if (x % 8 === 4 && y % 8 === 4) {
+        nonGridGradSum += gx + gy;
+        nonGridCount++;
       }
     }
   }
 
-  return count > 0 ? lowGradSum / count : 2.0;
+  if (gridCount === 0 || nonGridCount === 0) return 0;
+
+  const avgGrid = gridGradSum / gridCount;
+  const avgNonGrid = nonGridGradSum / nonGridCount;
+  const ratio = (avgGrid - avgNonGrid) / Math.max(1, avgNonGrid);
+
+  // 转换为 0~100% 块效应比例
+  return Math.min(100, Math.max(0, ratio * 75));
 }
 
 /**
@@ -610,7 +835,6 @@ function detectEdgeOvershoot(
   for (let y = 20; y < h - 20; y += step) {
     const row = y * w;
     for (let x = 20; x < w - 20; x += step) {
-      // 水平方向寻找清晰阶跃边缘
       const g0 = gray[row + (x - 2)];
       const g1 = gray[row + (x - 1)];
       const g2 = gray[row + x];
@@ -619,7 +843,6 @@ function detectEdgeOvershoot(
 
       const jump = Math.abs(g3 - g1);
       if (jump > 35) {
-        // 判断上升沿或下降沿是否存在 overshoot 突起
         const isRising = g3 > g1;
         let overshootVal = 0;
         let baseline = 0;
@@ -659,14 +882,15 @@ function detectEdgeOvershoot(
 }
 
 /**
- * 计算色散 (CA) 与紫边
+ * 计算色散 (CA) 与紫边 (考虑噪声底噪过滤)
  */
 function calculateChromaticAberration(
   r: Float32Array,
   g: Float32Array,
   b: Float32Array,
   w: number,
-  h: number
+  h: number,
+  noiseSigma: number
 ): ChromaticAberrationResult {
   let totalDelta = 0;
   let maxDelta = 0;
@@ -675,11 +899,13 @@ function calculateChromaticAberration(
   let totalEdgeCount = 0;
 
   const step = 4;
+  const edgeThreshold = Math.max(35, noiseSigma * 5);
+
   for (let y = 10; y < h - 10; y += step) {
     const row = y * w;
     for (let x = 10; x < w - 10; x += step) {
       const gradG = Math.abs(g[row + (x + 1)] - g[row + (x - 1)]);
-      if (gradG > 35) {
+      if (gradG > edgeThreshold) {
         totalEdgeCount++;
         const dr = (r[row + (x + 1)] - r[row + (x - 1)]) / 2;
         const dg = (g[row + (x + 1)] - g[row + (x - 1)]) / 2;
@@ -724,14 +950,13 @@ function calculateChromaticAberration(
 }
 
 /**
- * 计算暗角与相对照度 (采用高光分位数避免暗色物体误判)
+ * 计算暗角与相对照度
  */
 function calculateVignetting(
   gray: Float32Array,
   w: number,
   h: number
 ): VignettingResult {
-  // 采样中心区域 (35% 范围) 的 80% 高光亮度
   const centerSamples: number[] = [];
   const cx1 = Math.floor(w * 0.35);
   const cx2 = Math.floor(w * 0.65);
@@ -751,7 +976,6 @@ function calculateVignetting(
       ? centerSamples.slice(0, centerTopN).reduce((a, b) => a + b, 0) / centerTopN
       : 128;
 
-  // 采样四角区域 (15% 范围)
   const cornerSamples: number[] = [];
   const cornerW = Math.floor(w * 0.15);
   const cornerH = Math.floor(h * 0.15);
@@ -816,14 +1040,19 @@ function generateDiagnosis(
   lwph: number,
   textureConfidence: number,
   megapixels: number,
+  snrDb: number,
+  noiseLevel: string,
+  blockinessPct: number,
+  isResolutionLimited: boolean,
   exif?: ExifOverview
 ): { diagnosisSummary: string; recommendations: string[] } {
   const recommendations: string[] = [];
 
-  let centerDesc = `中心分辨率高 (${centerSharpness}分，边角 ${cornerAvgSharpness}分)`;
+  let centerDesc = `中心分辨率 (${centerSharpness}分，边角 ${cornerAvgSharpness}分)`;
   if (centerSharpness >= 85) centerDesc = `中心解析力极高 (${centerSharpness}分，边角 ${cornerAvgSharpness}分)`;
-  if (centerSharpness < 70) centerDesc = `中心锐度适中 (${centerSharpness}分，边角 ${cornerAvgSharpness}分)`;
-  if (centerSharpness < 55) centerDesc = `中心成像偏软 (${centerSharpness}分，边角 ${cornerAvgSharpness}分)`;
+  else if (centerSharpness >= 70) centerDesc = `中心锐度优良 (${centerSharpness}分，边角 ${cornerAvgSharpness}分)`;
+  else if (centerSharpness >= 55) centerDesc = `中心锐度适中 (${centerSharpness}分，边角 ${cornerAvgSharpness}分)`;
+  else centerDesc = `中心解析力偏低/偏软 (${centerSharpness}分，边角 ${cornerAvgSharpness}分)`;
 
   let falloffDesc = `边缘画质衰减控制在 ${falloffPct}%，像场一致性优异`;
   if (falloffPct > 40) {
@@ -833,7 +1062,7 @@ function generateDiagnosis(
     falloffDesc = `边角画质适度衰减 ${falloffPct}%（符合优质大光圈镜头正常光学特性）`;
     recommendations.push('主体置于中心或三分线区域可获得最佳锐利度。');
   } else {
-    recommendations.push('边角至中心一致性出色，可放心全开光圈使用。');
+    recommendations.push('像场一致性良好，可放心全开光圈使用。');
   }
 
   let caDesc = '未发现可见色散';
@@ -846,6 +1075,27 @@ function generateDiagnosis(
   if (vig.relativeIlluminationPct < 75) {
     vigDesc = `边角暗角衰减约 ${vig.evLoss} EV (${vig.relativeIlluminationPct}%)`;
     recommendations.push('拍摄纯色背景或天空时可适当开启机内暗角补偿。');
+  }
+
+  // 噪点与画质诊断
+  if (snrDb < 26) {
+    recommendations.push(
+      `⚠️ 画面检测到【${noiseLevel}】(信噪比 ${snrDb.toFixed(1)} dB)，杂讯严重破坏了微观光学细节，已执行降噪与去伪影扣分。`
+    );
+  }
+
+  // JPEG 块效应诊断
+  if (blockinessPct > 15) {
+    recommendations.push(
+      `⚠️ 检测到高强度 JPEG 8x8 压缩块效应/马赛克伪影 (${blockinessPct.toFixed(1)}%)，已算法去除非光学伪梯度。`
+    );
+  }
+
+  // 物理低分辨率限制提示
+  if (isResolutionLimited) {
+    recommendations.push(
+      `📐 原图物理分辨率仅 ${megapixels.toFixed(2)} MP，受到像素采样物理极限约束，无法传递高频光学微观纹理。`
+    );
   }
 
   // 锐化与计算摄影诊断
@@ -871,9 +1121,9 @@ function generateDiagnosis(
 
   const cameraInfo = exif?.model ? ` (${exif.model})` : '';
   const diagnosisSummary = `该镜头/设备${cameraInfo}在当前拍摄条件下综合评分为 ${overallScore} 分 (${
-    overallScore >= 90 ? '卓越' : overallScore >= 80 ? '优秀' : overallScore >= 70 ? '良好' : '普通'
-  })，总画面估计解析力约 ${lwph} LW/PH (${megapixels.toFixed(1)}MP)。${centerDesc}，${falloffDesc}。${caDesc}，${vigDesc}。${
-    isOversharpened ? `(已校准机内 ${overshootPct}% 边缘过冲)` : ''
+    overallScore >= 90 ? '卓越' : overallScore >= 80 ? '优秀' : overallScore >= 70 ? '良好' : overallScore >= 55 ? '普通' : '偏低'
+  })，总画面估计解析力约 ${lwph} LW/PH (${megapixels.toFixed(1)}MP，信噪比 ${snrDb.toFixed(1)}dB)。${centerDesc}，${falloffDesc}。${caDesc}，${vigDesc}。${
+    isResolutionLimited ? `[受${megapixels.toFixed(1)}MP低像素物理约束]` : ''
   }`;
 
   return {

@@ -89,7 +89,7 @@ export const Header: React.FC<HeaderProps> = ({
                 margin: 0,
               }}
             >
-              LensOptics 镜头成像质量评估与 MTF 分析器
+              LensMark 镜头成像质量评估与 MTF 分析器
             </h1>
             {fileName && (
               <span
@@ -123,7 +123,7 @@ export const Header: React.FC<HeaderProps> = ({
               margin: '2px 0 0 0',
             }}
           >
-            免标板实拍镜头素质评估 · 清晰度热力图 · 9 像场对比 · 色散紫边/暗角检测 · ISO 12233 斜边测量
+            实拍照片镜头成像素质评估 · 稳健相干去噪 · 9 像场对比 · 色散紫边/暗角检测 · ISO 12233 斜边 MTF
           </p>
         </div>
       </div>

@@ -77,6 +77,13 @@ export interface LensQualityResult {
   lwphEstimate: number; // 估计总画面解析力 (Line Widths / Picture Height)
   textureConfidence: number; // 画面有效可评估纹理置信度 (0~100%)
   
+  // 噪声、压缩伪影与物理分辨率约束
+  snrDb: number; // 画面信噪比 (dB)
+  noiseLevel: '极低噪点' | '正常低噪' | '中等噪点' | '重度高噪' | '极高杂讯';
+  blockinessPct: number; // 8x8 JPEG 块效应/马赛克强度 (%)
+  resolutionMegapixels: number; // 原图等效百万像素数 (MP)
+  isResolutionLimited: boolean; // 是否受限于低分辨率物理瓶颈
+
   // 分区矩阵 (9 宫格 / 5 关键区)
   zones: ZoneMetric[];
   
