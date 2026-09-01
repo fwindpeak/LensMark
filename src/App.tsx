@@ -36,6 +36,8 @@ export const App: React.FC = () => {
   const [fileName, setFileName] = useState<string>('ISO 12233 标板样张');
   const [isSynthetic, setIsSynthetic] = useState<boolean>(true);
   const isSyntheticRef = useRef<boolean>(true);
+  const [isRaw, setIsRaw] = useState<boolean>(false);
+  const isRawRef = useRef<boolean>(false);
   const [mode, setMode] = useState<AnalysisMode>('photo_quality');
 
   // RAW 解码状态
@@ -67,8 +69,15 @@ export const App: React.FC = () => {
 
   // 全面分析图像 (照片技术质量 + 镜头光学归因 + 自动斜边扫描 + 当前 ROI MTF)
   const processImageAnalysis = useCallback(
-    (img: HTMLImageElement, currentRoi: ROI, parsedExif?: ParsedExifResult | null, isSynth?: boolean) => {
+    (
+      img: HTMLImageElement,
+      currentRoi: ROI,
+      parsedExif?: ParsedExifResult | null,
+      isSynth?: boolean,
+      isRawInput?: boolean
+    ) => {
       const synth = isSynth !== undefined ? isSynth : isSyntheticRef.current;
+      const raw = isRawInput !== undefined ? isRawInput : isRawRef.current;
       let calculatedMtf: MTFResult | null = null;
 
       // 1. 当前 ROI 斜边测量
@@ -87,7 +96,8 @@ export const App: React.FC = () => {
           currentRoi,
           img.naturalWidth,
           img.naturalHeight,
-          parsedExif?.overview
+          parsedExif?.overview,
+          raw
         );
         setPhotoReport(photoRes);
       } catch (err) {
@@ -104,7 +114,8 @@ export const App: React.FC = () => {
             parsedExif,
             img.naturalWidth,
             img.naturalHeight,
-            synth
+            synth,
+            raw
           );
           setLensReport(lensPerf);
         } catch (err) {
@@ -145,6 +156,8 @@ export const App: React.FC = () => {
         setFileName(preset.name);
         setIsSynthetic(true);
         isSyntheticRef.current = true;
+        setIsRaw(false);
+        isRawRef.current = false;
         setExifResult(null);
         setActiveZoneId(null);
 
@@ -157,7 +170,7 @@ export const App: React.FC = () => {
           h: rh,
         };
         setRoi(defaultRoi);
-        processImageAnalysis(img, defaultRoi, null, true);
+        processImageAnalysis(img, defaultRoi, null, true, false);
       } catch (err) {
         console.error('Failed to load sample preset:', err);
       }
@@ -187,6 +200,8 @@ export const App: React.FC = () => {
         setFileName(`${file.name} [RAW]`);
         setIsSynthetic(false);
         isSyntheticRef.current = false;
+        setIsRaw(true);
+        isRawRef.current = true;
         setExifResult(result.exifResult);
         setActiveZoneId(null);
 
@@ -200,7 +215,7 @@ export const App: React.FC = () => {
           h: rh,
         };
         setRoi(defaultRoi);
-        processImageAnalysis(img, defaultRoi, result.exifResult, false);
+        processImageAnalysis(img, defaultRoi, result.exifResult, false, true);
       } catch (err) {
         console.error('Failed to decode RAW file:', err);
         alert(`RAW 格式照片解码失败: ${err instanceof Error ? err.message : '未知错误'}`);
@@ -229,6 +244,8 @@ export const App: React.FC = () => {
         setFileName(file.name);
         setIsSynthetic(false);
         isSyntheticRef.current = false;
+        setIsRaw(false);
+        isRawRef.current = false;
         setActiveZoneId(null);
 
         // 默认居中框选区域
@@ -241,7 +258,7 @@ export const App: React.FC = () => {
           h: rh,
         };
         setRoi(defaultRoi);
-        processImageAnalysis(img, defaultRoi, parsed, false);
+        processImageAnalysis(img, defaultRoi, parsed, false, false);
       };
       if (typeof e.target?.result === 'string') {
         img.src = e.target.result;
@@ -270,7 +287,8 @@ export const App: React.FC = () => {
           newRoi,
           image.naturalWidth,
           image.naturalHeight,
-          exifResult?.overview
+          exifResult?.overview,
+          isRawRef.current
         );
         setPhotoReport(updatedPhoto);
 
@@ -282,7 +300,8 @@ export const App: React.FC = () => {
             exifResult,
             image.naturalWidth,
             image.naturalHeight,
-            isSyntheticRef.current
+            isSyntheticRef.current,
+            isRawRef.current
           );
           setLensReport(updatedLens);
         }
@@ -324,6 +343,7 @@ export const App: React.FC = () => {
         exifResult={exifResult}
         fileName={fileName}
         isSynthetic={isSynthetic}
+        isRaw={isRaw}
       />
 
       {/* 主工作区 */}

@@ -22,6 +22,7 @@ interface HeaderProps {
   exifResult?: ParsedExifResult | null;
   fileName?: string;
   isSynthetic?: boolean;
+  isRaw?: boolean;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -34,6 +35,7 @@ export const Header: React.FC<HeaderProps> = ({
   exifResult,
   fileName,
   isSynthetic,
+  isRaw,
 }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [showPresetsMenu, setShowPresetsMenu] = useState(false);
@@ -96,10 +98,20 @@ export const Header: React.FC<HeaderProps> = ({
                   fontSize: '11px',
                   padding: '2px 8px',
                   borderRadius: '10px',
-                  backgroundColor: isSynthetic ? 'rgba(56, 189, 248, 0.15)' : 'rgba(74, 222, 128, 0.15)',
-                  color: isSynthetic ? 'var(--accent-color)' : 'var(--success-color)',
-                  border: `1px solid ${isSynthetic ? 'rgba(56, 189, 248, 0.3)' : 'rgba(74, 222, 128, 0.3)'}`,
-                  fontWeight: 500,
+                  backgroundColor: isRaw
+                    ? 'rgba(168, 85, 247, 0.15)'
+                    : isSynthetic
+                    ? 'rgba(56, 189, 248, 0.15)'
+                    : 'rgba(74, 222, 128, 0.15)',
+                  color: isRaw ? '#c084fc' : isSynthetic ? 'var(--accent-color)' : 'var(--success-color)',
+                  border: `1px solid ${
+                    isRaw
+                      ? 'rgba(168, 85, 247, 0.3)'
+                      : isSynthetic
+                      ? 'rgba(56, 189, 248, 0.3)'
+                      : 'rgba(74, 222, 128, 0.3)'
+                  }`,
+                  fontWeight: 600,
                   maxWidth: '220px',
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',

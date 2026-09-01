@@ -19,7 +19,8 @@ export function evaluatePhotoQuality(
   subjectRoi?: ROI,
   sourceWidth?: number,
   sourceHeight?: number,
-  _exif?: ExifOverview
+  _exif?: ExifOverview,
+  isRaw?: boolean
 ): PhotoQualityReport {
   const nativeW =
     sourceWidth ||
@@ -151,7 +152,7 @@ export function evaluatePhotoQuality(
   const colorPerformance = analyzeColorPerformance(rChan, gChan, bChan, sampleW, sampleH);
 
   // 8. 处理痕迹与压缩损失 (Processing Artifacts)
-  const processingArtifacts = analyzeProcessingArtifacts(gray, sampleW, sampleH);
+  const processingArtifacts = analyzeProcessingArtifacts(gray, sampleW, sampleH, isRaw);
 
   // 9. 观察到的局部成像现象 (Observed Phenomena)
   const observedPhenomena = analyzeObservedPhenomena(
@@ -552,8 +553,19 @@ function analyzeColorPerformance(
 function analyzeProcessingArtifacts(
   gray: Float32Array,
   w: number,
-  h: number
+  h: number,
+  isRaw?: boolean
 ): ProcessingArtifacts {
+  if (isRaw) {
+    return {
+      overshootPct: 0,
+      hasSharpeningHalos: false,
+      jpegBlockinessPct: 0,
+      suspectedNrSmearing: false,
+      processingSummary: 'RAW 格式原始传感器数据线性解码，无机内 JPEG 压缩块效应与机内锐化过冲。',
+    };
+  }
+
   // 1. ISO 12233 边缘过冲白边 (Overshoot) 探查
   let totalOvershoot = 0;
   let edgeProfileCount = 0;

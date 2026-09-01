@@ -18,7 +18,8 @@ export function evaluateLensPerformance(
   exifResult?: ParsedExifResult | null,
   _sourceWidth?: number,
   sourceHeight?: number,
-  isSyntheticChart?: boolean
+  isSyntheticChart?: boolean,
+  isRawSource?: boolean
 ): LensPerformanceReport {
   const nativeH =
     sourceHeight ||
@@ -27,12 +28,14 @@ export function evaluateLensPerformance(
     600;
 
   const overview = exifResult?.overview;
-  const isRaw = false; // 由 EXIF 元数据或 RAW 标识推断
+  const isRaw = isRawSource || false;
 
   // 1. 镜头与曝光元数据提炼
   let sourceFormat: LensPerformanceReport['lensMetadata']['sourceFormat'] =
     '标准 JPEG (机内渲染)';
-  if (isSyntheticChart) {
+  if (isRaw) {
+    sourceFormat = 'RAW (纯净线性数据)';
+  } else if (isSyntheticChart) {
     sourceFormat = 'RAW (纯净线性数据)';
   }
 
@@ -44,7 +47,7 @@ export function evaluateLensPerformance(
 
   const lensMetadata = {
     lensModel: overview?.lensModel || '未知光学镜头 (无 EXIF)',
-    cameraBody: overview?.model || (isSyntheticChart ? 'ISO 12233 标定合成源' : '通用数码相机'),
+    cameraBody: overview?.model || (isSyntheticChart ? 'ISO 12233 标定合成源' : isRaw ? 'RAW 原始传感器源' : '通用数码相机'),
     focalLength: overview?.focalLength ? `${overview.focalLength} mm` : '未记录焦距',
     aperture: overview?.fNumber ? `f/${overview.fNumber}` : '未记录光圈',
     focusDistance: '未记录物距',
@@ -151,14 +154,18 @@ function runAttributionCheck(
     : '实拍测得的暗角仅供参考，严谨暗角测试需在均匀发光板或积分球下拍摄平场。';
 
   // 4. 后期锐化与降噪处理检查
-  const hasSharpening = photoQuality.processingArtifacts.hasSharpeningHalos;
+  const hasSharpening = isRaw || isSyntheticChart ? false : photoQuality.processingArtifacts.hasSharpeningHalos;
   const ispStatus = isRaw || isSyntheticChart ? 'passed' : hasSharpening ? 'warning' : 'passed';
   const ispEvidence = isRaw
-    ? 'RAW 纯净线性马赛克数据，未经过度机内锐化渲染。'
+    ? 'RAW 纯净线性传感器数据，经 WebAssembly 直接解码，未受机内 JPEG 压缩损耗与边缘锐化白边污染。'
+    : isSyntheticChart
+    ? '合成标定测试源，无机内后处理白边过冲。'
     : hasSharpening
     ? `JPEG 文件检测到机内边缘锐化过冲（${photoQuality.processingArtifacts.overshootPct}%），存在高频伪信号。`
     : 'JPEG 机内锐化处于温和范围。';
-  const ispImpact = hasSharpening
+  const ispImpact = isRaw || isSyntheticChart
+    ? '边缘阶跃过渡自然，真实反映镜头光学对比度传递 (MTF)。'
+    : hasSharpening
     ? '过度锐化白边会虚假抬高 MTF 高频响应，需结合 ESF 过冲曲线去偏。'
     : '边缘过渡自然，可真实反映对比度传递。';
 
@@ -174,7 +181,7 @@ function runAttributionCheck(
     ? '满足 ISO 12233 斜边空间频率响应测量条件。'
     : '缺少标准斜边时无法准确量化 MTF50 数值。';
 
-  const overallValidForLensTest = isSyntheticChart || (hasValidMtfEdge && !hasSharpening);
+  const overallValidForLensTest = isSyntheticChart || (hasValidMtfEdge && (isRaw || !hasSharpening));
 
   return {
     overallValidForLensTest,
