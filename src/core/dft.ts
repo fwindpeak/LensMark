@@ -1,55 +1,22 @@
-export interface MtfSpectrum {
-  mtf: number[];
-  mtf50: number; // in cycles/pixel (c/p)
-  numFreqs: number;
-}
 
-/**
- * 离散傅里叶变换 (DFT) 计算 MTF 频域响应与 MTF50 指标
- */
-export function computeMtfFromLsf(
-  windowedLsf: number[],
-  oversampling = 4,
-  numFreqs = 64
-): MtfSpectrum {
-  const winLen = windowedLsf.length;
-  const mtf: number[] = [];
-  let dcValue = 0;
-
-  for (let f = 0; f < numFreqs; f++) {
-    let re = 0;
-    let im = 0;
-    const omega = (2 * Math.PI * f) / winLen;
-
+export function computeMtfFromLsf(windowedLsf: number[], oversampling = 4, numFreqs = 64): { mtf: number[]; mtf50: number | null; numFreqs: number } {
+  if (!windowedLsf.length || windowedLsf.some(v => !Number.isFinite(v))) throw new Error('无效的边缘响应');
+  const winLen = windowedLsf.length, mtf: number[] = [];
+  const dc = Math.abs(windowedLsf.reduce((s, v) => s + v, 0));
+  if (dc < 1e-8) throw new Error('边缘直流响应不足');
+  const count = Math.min(numFreqs, Math.floor(0.5 * winLen / oversampling) + 1);
+  for (let f = 0; f < count; f++) {
+    let re = 0, im = 0;
     for (let n = 0; n < winLen; n++) {
-      const val = windowedLsf[n];
-      re += val * Math.cos(omega * n);
-      im -= val * Math.sin(omega * n);
+      const phase = 2 * Math.PI * f * n / winLen;
+      re += windowedLsf[n] * Math.cos(phase); im -= windowedLsf[n] * Math.sin(phase);
     }
-
-    const mag = Math.sqrt(re * re + im * im);
-    if (f === 0) {
-      dcValue = mag;
-    }
-    // 归一化到 DC 分量 (零频 = 1.0)
-    mtf.push(dcValue > 0 ? mag / dcValue : 0);
+    const x = Math.PI * f / winLen, correction = f === 0 ? 1 : x / Math.sin(x);
+    mtf.push(Math.hypot(re, im) / dc * correction);
   }
-
-  // 线性插值寻找 MTF=0.5 处的空间频率 (MTF50)
-  let mtf50 = 0;
-  for (let f = 0; f < numFreqs - 1; f++) {
-    if (mtf[f] >= 0.5 && mtf[f + 1] <= 0.5) {
-      const ratio = (0.5 - mtf[f]) / (mtf[f + 1] - mtf[f]);
-      const freqIdx = f + ratio;
-      // 换算为 cycles/pixel
-      mtf50 = (freqIdx / winLen) * oversampling;
-      break;
-    }
+  let mtf50: number | null = null;
+  for (let f = 1; f < mtf.length; f++) if (mtf[f - 1] >= 0.5 && mtf[f] < 0.5) {
+    mtf50 = (f - 1 + (mtf[f - 1] - 0.5) / (mtf[f - 1] - mtf[f])) * oversampling / winLen; break;
   }
-
-  return {
-    mtf,
-    mtf50,
-    numFreqs,
-  };
+  return { mtf, mtf50, numFreqs: count };
 }

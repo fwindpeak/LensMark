@@ -89,7 +89,7 @@ export const MtfChart: React.FC<MtfChartProps> = ({ result }) => {
       ctx.restore();
 
       // MTF50 交叉点与垂线
-      if (mtf50 > 0 && mtf50 <= maxFreq) {
+      if (mtf50 !== null && mtf50 > 0 && mtf50 <= maxFreq) {
         const xMtf50 = padL + (mtf50 / maxFreq) * plotW;
         ctx.save();
         ctx.strokeStyle = 'rgba(56, 189, 248, 0.4)';

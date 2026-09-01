@@ -1,149 +1,46 @@
-# LensMark 镜头成像质量评估与 MTF 分析系统技术文档与维护指南
 
-## 1. 系统概述与设计理念
+# 算法边界与本次修复
 
-### 1.1 背景与定位
-传统 MTF 测量工具（如单一斜边测量器）对测试环境要求极高：必须精确拍摄 ISO 12233 标准标板，用户需在画面中反复微调选区，且经常由于倾角不合适或边缘模糊导致“未检出斜边”而无法获得任何分析结果。
+## 原来为什么会误判
 
-**LensMark** 对此进行了全面的科学重构与升级：
-- **默认支持任意实拍照片**（风景、人像、静物、街拍、星空、标板等），无需用户强制画框；
-- **结构张量相干性去噪 (Structure Tensor Coherence)**：严格过滤随机高频噪点与散粒噪声，杜绝老旧高噪点手机照片产生虚假高锐度；
-- **MAD 稳健噪声与信噪比估计 (SNR dB)**：基于小波高频残差中位数计算真实噪声标准差，执行科学画质惩罚；
-- **JPEG 8x8 块效应与马赛克识别**：自动抑制重度压缩带来的虚假高频网格边缘；
-- **物理分辨率科学标定与封顶**：结合传感器物理像素规模与 LW/PH 真实信息容量约束；
-- **一键输出镜头综合光学素质评分与定级**（S / A / B / C / D）；
-- **全图清晰度分布热力图 (Heatmap)**：空间锐度与微反差直观可视化；
-- **9 像场解析力矩阵与门控边角衰减率**：中心锐度 vs 4 边角画质衰减一目了然；
-- **色散紫边 (CA) 与暗角 (Vignetting) 自动量化**；
-- **智能光学诊断与实拍建议**：提供光圈收缩档位与构图后期指导；
-- **双模式无缝切换**：保留完整的 ISO 12233 斜边 4x 超采样 MTF / ESF / LSF 精细测量，并支持画面斜边自动扫描与一键聚焦。
+- 主体得分直接由梯度幅度映射到 0–100。纹理密度、反差、噪声和数字锐化都会提高该值，不能据此识别合焦或镜头质量。
+- 原照片噪声实现优先排除大梯度块；找不到平坦块时仍返回固定 sigma=2.0，并输出低噪声结论。
+- 合成模式写死中心/中场/边角 MTF、色差、暗角和畸变。实拍模式把单个 ROI 的 MTF 乘 0.85 / 0.68 来生成未测量的像场，固定边角衰减 32%。
+- 彩色物体的通道差被转换成“彩边宽度”，普通场景中心与角落的亮度差被归为光学暗角。
+- RAW 经过 8-bit 去马赛克、白平衡及 JPEG 再编码，解码失败还可能使用内嵌预览，但报告仍称其为纯净线性 RAW。
+- LSF 对 ESF 导数取绝对值，会改变负振铃与噪声响应。斜边拟合缺少单边结构、直线残差与最低倾角筛查。
 
----
+以上问题来自实现本身，不应通过调低分数阈值掩盖。
 
-## 2. 核心算法原理与数学公式
+## 当前算法
 
-### 2.1 结构相干去噪与微块清晰度评估 (Structure Tensor Coherence + MAD)
-为了彻底避免高 ISO 噪点、传感器随机颗粒及 JPEG 马赛克伪影被误判为“高锐度”，LensMark 采用了结构张量相干性滤波：
+### 照片层
 
-1. **MAD 稳健噪声估计 (Median Absolute Deviation)**：
-   $$\sigma_{noise} = \frac{\text{median}(|\text{Laplacian}(I)|)}{4.047}$$
-   $$\text{SNR} = 20 \log_{10}\left(\frac{\mu_{signal}}{\sigma_{noise}}\right) \text{ dB}$$
+曝光概览最多 1280 px 长边，明确报告采样尺寸。只陈述接近编码上下限的比例，不从直方图推出曝光“正确”或传感器动态范围。
 
-2. **局部结构张量相干性 (Coherence)**：
-   $$J_{xx} = G_x^2, \quad J_{yy} = G_y^2, \quad J_{xy} = G_x G_y$$
-   $$C = \frac{(J_{xx} - J_{yy})^2 + 4 J_{xy}^2}{(J_{xx} + J_{yy} + \epsilon)^2}$$
-   - 真实光学边缘：$C \to 1.0$；
-   - 随机噪点/白杂讯：$C \to 0.0$。
+噪声使用九处原像素采样，每处最多 192×192，分成 16×16 小块。去除拟合亮度平面后计算 MAD / 0.67448975，使用低频残差、斜率与相邻残差相关性筛掉结构。缺少足够块返回 null；低于量化精度时不伪造 SNR。这仍是成片的空间残差估计，不能可靠分离所有纹理、相关噪声与降噪痕迹。
 
-3. **有效光学相干梯度**：
-   $$G_{optical} = \max(0, \sqrt{G_x^2 + G_y^2} - 2.2 \sigma_{noise}) \times C^{1.2}$$
+主体区域使用中央最多 512×512 原像素，提供梯度 RMS 和 Laplacian 方差，无通用好坏阈值，不推断合焦面积、景深或降噪涂抹。
 
-4. **Turbo / Jet 科学色彩热力图映射**：
-   将归一化后的 $[0.0, 1.0]$ 空间锐度值映射至暗蓝 $\to$ 青 $\to$ 绿 $\to$ 黄 $\to$ 鲜红阶梯，直接在画布上以半透明平滑图层叠加显示。
+### 局部系统 MTF
 
----
+- RGB 通道分别做分段 sRGB 逆转换后再加权为亮度。
+- ROI 48–1024 px；筛查通道截断、两侧平台、单一边缘、2°–15° 倾角、至少 80% 有效行、拟合残差不超过 0.6 px。
+- 法向投影到 4 倍采样的 ±16 px ESF。空 bin 拒测；保留差分符号，用 Hann 窗和前向差分频响补偿。
+- 输出频率范围 0–0.5 cycles/pixel。未找到 0.5 响应交点返回 null，不把 0 当作“极锐”。
+- 门槛为保守的工程筛查，不是完整 ISO 12233 实现。低反差、强噪声、强锐化或复杂自然边缘可能被拒绝；拒测不是低画质结论。
 
-### 2.2 9 像场分区矩阵与边角画质衰减率 (Field Zone Falloff)
-光学系统由于场曲（Field Curvature）、彗差（Coma）与像散（Astigmatism），边缘画质往往低于中心。
+### 镜头层
 
-- **像场划分**：
-  - **中心像场 (Center)**：像场中央 $0 \sim 30\%$ 区域（主光轴附近）；
-  - **四角像场 (Top-Left, Top-Right, Bottom-Left, Bottom-Right)**：像场 $70\% \sim 100\%$ 边缘；
-  - **四边像场 (Top, Bottom, Left, Right)**：像场过渡区域。
+单个 ROI 只报告该位置的系统 MTF。色差、暗角和畸变没有已验证实现，均保留空值。合成图按真实像素走相同管线，不注入成绩。
 
-- **边角画质衰减率计算**：
-  $$Falloff\% = \max\left(0, \frac{Sharp_{center} - \overline{Sharp_{corners}}}{Sharp_{center}} \times 100\%\right)$$
-  - $< 20\%$：像场极其平坦，全开可用；
-  - $20\% \sim 35\%$：符合常规大光圈定焦镜头的正常衰减；
-  - $> 40\%$：边角明显软化，建议收缩 $1 \sim 2$ 档光圈改善。
+不同镜头比较必须控制机身、拍摄比例、靶面、光照、光圈、ISO、对焦和后期。记录表检查可见元数据、尺寸、来源、像场位置、方向；用户还需确认工具无法检查的条件。差值不自动转为镜头评级。
 
----
+## 参考
 
-### 2.3 色散 (CA) 与紫边量化 (Chromatic Aberration)
-垂轴色差（Lateral CA）表现为画面边缘高反差物体两侧红/蓝通道相对绿通道的子像素错位：
-1. **通道重心偏移**：在全图高反差边缘处计算 $R, G, B$ 通道的亚像素偏导：
-   $$\Delta_{RB} = \frac{\left|\frac{\partial R}{\partial x} - \frac{\partial B}{\partial x}\right|}{\left|\frac{\partial G}{\partial x}\right| + \epsilon}$$
-2. **紫边判定**：当局部 $R$ 与 $B$ 亮度同时显著高于 $G$ 通道（$R > G+30 \land B > G+30$）且处于高对比边界时计入紫边比例。
+- [Imatest: sharpness](https://www.imatest.com/imaging/sharpness/)：系统锐度与图像处理对 MTF 的影响。
+- [Imatest: slanted-edge measurement consistency](https://www.imatest.com/docs/mtf-measurement-consistency/)：噪声和选区大小对结果一致性的影响。
+- [Imatest: noise](https://www.imatest.com/imaging/noise/)：平坦区域与噪声测量。
+- [LibRaw 数据结构](https://www.libraw.org/docs/API-datastruct-eng.html)：处理后图像与原始数据、输出参数。
 
----
-
-### 2.4 暗角与相对照度 (Vignetting & EV Loss)
-1. **相对照度计算**：
-   $$Illum_{relative}\% = \frac{\overline{Luminance_{corners}}}{\overline{Luminance_{center}}} \times 100\%$$
-2. **曝光级数衰减 (EV Loss)**：
-   $$\Delta EV = \left| \log_2 \left( \frac{Illum_{relative}}{100} \right) \right|$$
-
----
-
-### 2.5 ISO 12233 斜边 MTF / SFR 测量管线
-当切换至专业斜边模式时，执行严密的 ISO 12233 测量流程：
-1. **sRGB 物理光强反 Gamma 线性化**：
-   $$L(V) = \begin{cases} \frac{V}{12.92}, & V \le 0.04045 \\ \left(\frac{V+0.055}{1.055}\right)^{2.4}, & V > 0.04045 \end{cases}$$
-2. **亚像素边缘导数质心提取与最小二乘拟合**：
-   $$x_{centroid} = \frac{\sum x \cdot |\nabla I(x)|}{\sum |\nabla I(x)|} \implies x = k \cdot y + b$$
-3. **4x 超采样 ESF (Edge Spread Function)**：将每行像素根据拟合直线投影折叠至 4 倍密度的空间网格。
-4. **汉宁窗差分 LSF (Line Spread Function)**：
-   $$LSF[n] = \frac{ESF[n+1] - ESF[n-1]}{2} \cdot w_{Hanning}[n]$$
-5. **DFT 频域解算与 MTF50 定位**：通过离散傅里叶变换计算频域调制幅度并归一化至 DC=1.0，插值求解 MTF 降至 50% 时的空间频率（cycles/pixel）。
-
----
-
-## 3. 代码架构与模块索引
-
-```
-src/
-├── core/                       # 核心数学与光学算法层
-│   ├── lensQuality.ts          # 全图镜头素质分析（评分、热力图、9像场、色散、暗角、诊断）
-│   ├── autoEdgeDetector.ts     # 画面高反差倾斜边缘多尺度自动扫描与去重
-│   ├── sampleImages.ts         # 预设样张生成器（ISO标板、大光圈模拟、广角风光等）
-│   ├── grayscale.ts            # 物理光强线性化与灰度转换
-│   ├── edgeDetection.ts        # 斜边亚像素质心提取与自适应水平/垂直直线拟合
-│   ├── esfLsf.ts               # 4x 超采样 ESF 折叠构建与汉宁窗 LSF
-│   ├── dft.ts                  # 快速离散傅里叶变换与 MTF50 计算
-│   └── index.ts                # 统一导出
-├── components/                 # React UI 组件层
-│   ├── Header.tsx              # 顶栏（模式切换器、预设样张选择、照片上传、指南弹窗）
-│   ├── ImageWorkspace.tsx      # 主图像视口（Canvas 渲染、热力图 Overlay、斜边标记、ROI 选区）
-│   ├── LensOverviewPanel.tsx   # 镜头综合素质评估面板（评分、4大指标、9宫格矩阵、诊断建议）
-│   ├── MetricsCards.tsx        # 斜边模式 MTF50 指标卡
-│   ├── GuideSection.tsx        # 算法原理与使用指南弹窗
-│   └── Charts/                 # 可视化图表
-│       ├── MtfChart.tsx        # MTF 调制传递函数曲线图
-│       └── EsfLsfChart.tsx     # ESF 边缘扩散与 LSF 线扩散空间域图
-├── types/
-│   └── mtf.ts                  # 全局 TypeScript 接口定义
-└── App.tsx                     # 根组件（状态流转与双模式调度）
-```
-
----
-
-## 4. 维护与二次开发指南
-
-### 4.1 如何调整镜头综合评分权重
-若需针对特定场景（如人像镜头或显微镜头）调整综合评分权重，可直接修改 [src/core/lensQuality.ts](file:///Users/guokai/code/my-opensource/mtf-analyzer/src/core/lensQuality.ts) 中的第 335~345 行：
-```typescript
-// 当前权重：中心锐度 40% + 边角衰减控制 30% + 色散表现 15% + 暗角照度 15%
-const overallScore = Math.round(
-  centerSharpness * 0.40 +
-  falloffScore * 0.30 +
-  caScore * 0.15 +
-  vigScore * 0.15
-);
-```
-
-### 4.2 如何扩展 EXIF 拍摄参数读取
-若希望在导入照片时自动解析光圈 (F-Number)、焦距 (Focal Length)、ISO 与快门速度：
-1. 安装 `exifreader` 或 `exifr`：
-   ```bash
-   bun add exifr
-   ```
-2. 在 `handleFileUpload` 中读取 `file` 对应 ArrayBuffer 的 EXIF 元数据，并透传给 `LensOverviewPanel` 展示与加入诊断规则。
-
-### 4.3 构建与测试
-```bash
-# 启动本地开发热更新服务
-bun dev
-
-# TypeScript 类型检查与生产打包
-bun run build
-```
+这些资料支持测量边界，不代表第三方验证了本项目或其具体门槛。
