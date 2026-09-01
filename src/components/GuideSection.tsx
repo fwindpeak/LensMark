@@ -100,12 +100,29 @@ export const GuideModal: React.FC<GuideModalProps> = ({ isOpen, onClose }) => {
             </ul>
           </div>
 
+          {/* RAW 格式解码说明 */}
+          <div style={{ backgroundColor: 'rgba(30, 41, 59, 0.5)', padding: '12px 14px', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px' }}>
+              <Layers size={16} color="var(--accent-color)" />
+              <h3 style={{ fontSize: '14px', fontWeight: 600, color: 'var(--accent-color)', margin: 0 }}>
+                三、LibRaw + WebAssembly 纯前端 RAW 格式解析
+              </h3>
+            </div>
+            <p style={{ marginBottom: '6px' }}>
+              无需上传至任何后端服务器，完全在浏览器端通过 Web Worker + WebAssembly 异步多线程解码主流相机原厂 RAW 文件：
+            </p>
+            <ul style={{ paddingLeft: '20px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+              <li><strong>全主流格式覆盖</strong>：Sony (.ARW)、Canon (.CR2/.CR3)、Nikon (.NEF/.NRW)、Adobe DNG、Fujifilm (.RAF)、Olympus (.ORF)、Panasonic (.RW2) 等。</li>
+              <li><strong>传感器光学原真性</strong>：直接访问未受相机机内有损压缩或过冲涂抹的原始传感器 RAW 信号与色彩矩阵。</li>
+            </ul>
+          </div>
+
           {/* EXIF 元数据说明 */}
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px' }}>
               <BookOpen size={16} color="#38bdf8" />
               <h3 style={{ fontSize: '14px', fontWeight: 600, color: '#fff', margin: 0 }}>
-                三、完整 EXIF 元数据提取与 JSON 导出
+                四、完整 EXIF 元数据提取与 JSON 导出
               </h3>
             </div>
             <p>

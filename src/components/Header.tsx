@@ -280,7 +280,7 @@ export const Header: React.FC<HeaderProps> = ({
         <input
           ref={fileInputRef}
           type="file"
-          accept="image/*"
+          accept="image/*,.arw,.cr2,.cr3,.nef,.nrw,.dng,.raf,.orf,.rw2,.pef,.srw,.3fr,.mef,.mrw,.raw"
           style={{ display: 'none' }}
           onChange={handleFileChange}
         />

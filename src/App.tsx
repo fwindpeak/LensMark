@@ -12,6 +12,8 @@ import {
   analyzeLensQuality,
   detectSlantedEdges,
   parsePhotoExif,
+  isRawFile,
+  decodeRawImage,
 } from './core';
 import { SAMPLE_PRESETS, SamplePreset } from './core/sampleImages';
 import { Header } from './components/Header';
@@ -22,13 +24,17 @@ import { MtfChart } from './components/Charts/MtfChart';
 import { EsfLsfChart } from './components/Charts/EsfLsfChart';
 import { GuideModal } from './components/GuideSection';
 import { ExifViewerModal } from './components/ExifViewerModal';
-import { Info, ArrowLeft } from 'lucide-react';
+import { Info, ArrowLeft, Loader2 } from 'lucide-react';
 
 export const App: React.FC = () => {
   const [image, setImage] = useState<HTMLImageElement | null>(null);
   const [fileName, setFileName] = useState<string>('ISO 12233 标板样张');
   const [isSynthetic, setIsSynthetic] = useState<boolean>(true);
   const [mode, setMode] = useState<AnalysisMode>('overview');
+
+  // RAW 解码状态
+  const [isDecodingRaw, setIsDecodingRaw] = useState<boolean>(false);
+  const [rawDecodeStatus, setRawDecodeStatus] = useState<string>('');
 
   // EXIF 元数据状态
   const [exifResult, setExifResult] = useState<ParsedExifResult | null>(null);
@@ -118,9 +124,46 @@ export const App: React.FC = () => {
     loadPreset(SAMPLE_PRESETS[0]);
   }, [loadPreset]);
 
-  // 处理本地图片上传 (包括 EXIF 全量提取)
+  // 处理本地图片与 RAW 格式照片上传 (包括 LibRaw WebAssembly 解码与 EXIF 全量提取)
   const handleFileUpload = async (file: File) => {
-    // 异步解析 EXIF 元数据
+    // 1. 判断是否为 RAW 格式照片
+    if (isRawFile(file)) {
+      try {
+        setIsDecodingRaw(true);
+        setRawDecodeStatus('正在初始化 LibRaw WebAssembly 解码器...');
+
+        const result = await decodeRawImage(file, (msg) => {
+          setRawDecodeStatus(msg);
+        });
+
+        const img = result.image;
+        setImage(img);
+        setFileName(`${file.name} [RAW]`);
+        setIsSynthetic(false);
+        setExifResult(result.exifResult);
+
+        // 默认居中框选区域
+        const rw = Math.min(240, Math.floor(img.naturalWidth * 0.35));
+        const rh = Math.min(240, Math.floor(img.naturalHeight * 0.35));
+        const defaultRoi: ROI = {
+          x: Math.floor((img.naturalWidth - rw) / 2),
+          y: Math.floor((img.naturalHeight - rh) / 2),
+          w: rw,
+          h: rh,
+        };
+        setRoi(defaultRoi);
+        processImageAnalysis(img, defaultRoi, result.exifResult);
+      } catch (err) {
+        console.error('Failed to decode RAW file:', err);
+        alert(`RAW 格式照片解码失败: ${err instanceof Error ? err.message : '未知错误'}`);
+      } finally {
+        setIsDecodingRaw(false);
+        setRawDecodeStatus('');
+      }
+      return;
+    }
+
+    // 2. 常规 RGB 格式 (JPEG/PNG/WebP/TIFF) 处理
     let parsed: ParsedExifResult | null = null;
     try {
       parsed = await parsePhotoExif(file);
@@ -380,6 +423,92 @@ export const App: React.FC = () => {
         exifResult={exifResult}
         fileName={fileName}
       />
+
+      {/* LibRaw WebAssembly RAW 照片解码加载遮罩 */}
+      {isDecodingRaw && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(11, 17, 32, 0.88)',
+            backdropFilter: 'blur(10px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 999,
+            padding: '20px',
+          }}
+        >
+          <div
+            className="card-glass"
+            style={{
+              padding: '32px 36px',
+              maxWidth: '440px',
+              width: '100%',
+              textAlign: 'center',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              gap: '16px',
+              border: '1px solid rgba(56, 189, 248, 0.3)',
+              boxShadow: '0 20px 50px rgba(0, 0, 0, 0.7)',
+            }}
+          >
+            <div
+              style={{
+                width: '56px',
+                height: '56px',
+                borderRadius: '16px',
+                background: 'linear-gradient(135deg, rgba(2, 132, 199, 0.2) 0%, rgba(56, 189, 248, 0.2) 100%)',
+                border: '1px solid rgba(56, 189, 248, 0.4)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: 'var(--accent-color)',
+              }}
+            >
+              <Loader2 size={28} className="spin" style={{ animation: 'spin 1.2s linear infinite' }} />
+            </div>
+
+            <div>
+              <h3 style={{ fontSize: '16px', fontWeight: 700, color: '#fff', margin: '0 0 6px 0' }}>
+                LibRaw WebAssembly RAW 格式解码中
+              </h3>
+              <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: 0, lineHeight: 1.6 }}>
+                {rawDecodeStatus || '正在通过纯浏览器端 WebAssembly 多线程解算相机 RAW 传感器信号与光学色彩...'}
+              </p>
+            </div>
+
+            <div
+              style={{
+                width: '100%',
+                height: '4px',
+                backgroundColor: 'rgba(255, 255, 255, 0.1)',
+                borderRadius: '2px',
+                overflow: 'hidden',
+                position: 'relative',
+              }}
+            >
+              <div
+                style={{
+                  position: 'absolute',
+                  top: 0,
+                  bottom: 0,
+                  left: 0,
+                  width: '60%',
+                  background: 'linear-gradient(90deg, #0284c7, #38bdf8)',
+                  borderRadius: '2px',
+                  animation: 'pulse 1.5s ease-in-out infinite',
+                }}
+              />
+            </div>
+
+            <span style={{ fontSize: '11px', color: '#64748b' }}>
+              支持 Sony ARW / Canon CR2·CR3 / Nikon NEF / Adobe DNG / Fuji RAF 等
+            </span>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
