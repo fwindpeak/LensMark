@@ -6,10 +6,12 @@ import {
   DetectedEdge,
   AnalysisMode,
 } from './types/mtf';
+import { ParsedExifResult } from './types/exif';
 import {
   analyzeMtf,
   analyzeLensQuality,
   detectSlantedEdges,
+  parsePhotoExif,
 } from './core';
 import { SAMPLE_PRESETS, SamplePreset } from './core/sampleImages';
 import { Header } from './components/Header';
@@ -19,6 +21,7 @@ import { MetricsCards } from './components/MetricsCards';
 import { MtfChart } from './components/Charts/MtfChart';
 import { EsfLsfChart } from './components/Charts/EsfLsfChart';
 import { GuideModal } from './components/GuideSection';
+import { ExifViewerModal } from './components/ExifViewerModal';
 import { Info, ArrowLeft } from 'lucide-react';
 
 export const App: React.FC = () => {
@@ -26,6 +29,10 @@ export const App: React.FC = () => {
   const [fileName, setFileName] = useState<string>('ISO 12233 标板样张');
   const [isSynthetic, setIsSynthetic] = useState<boolean>(true);
   const [mode, setMode] = useState<AnalysisMode>('overview');
+
+  // EXIF 元数据状态
+  const [exifResult, setExifResult] = useState<ParsedExifResult | null>(null);
+  const [isExifModalOpen, setIsExifModalOpen] = useState<boolean>(false);
 
   // ROI 选区
   const [roi, setRoi] = useState<ROI>({ x: 500, y: 320, w: 200, h: 160 });
@@ -45,62 +52,84 @@ export const App: React.FC = () => {
   const [isGuideOpen, setIsGuideOpen] = useState<boolean>(false);
 
   // 全面分析图像 (镜头素质 + 自动斜边扫描 + 当前 ROI MTF)
-  const processImageAnalysis = useCallback((img: HTMLImageElement, currentRoi: ROI) => {
-    // 1. 全图镜头光学成像质量评估
-    try {
-      const lq = analyzeLensQuality(img);
-      setLensResult(lq);
-    } catch (err) {
-      console.error('Failed to analyze lens quality:', err);
-    }
+  const processImageAnalysis = useCallback(
+    (img: HTMLImageElement, currentRoi: ROI, parsedExif?: ParsedExifResult | null) => {
+      // 1. 全图镜头光学成像质量评估
+      try {
+        const lq = analyzeLensQuality(
+          img,
+          img.naturalWidth,
+          img.naturalHeight,
+          parsedExif?.overview
+        );
+        setLensResult(lq);
+      } catch (err) {
+        console.error('Failed to analyze lens quality:', err);
+      }
 
-    // 2. 自动检测斜边
-    try {
-      const edges = detectSlantedEdges(img);
-      setDetectedEdges(edges);
-    } catch (err) {
-      console.error('Failed to detect edges:', err);
-    }
+      // 2. 自动检测斜边
+      try {
+        const edges = detectSlantedEdges(img);
+        setDetectedEdges(edges);
+      } catch (err) {
+        console.error('Failed to detect edges:', err);
+      }
 
-    // 3. 当前 ROI 斜边测量
-    try {
-      const res = analyzeMtf(img, currentRoi);
-      setMtfResult(res);
-    } catch (err) {
-      console.error('Failed to analyze MTF on ROI:', err);
-    }
-  }, []);
+      // 3. 当前 ROI 斜边测量
+      try {
+        const res = analyzeMtf(img, currentRoi);
+        setMtfResult(res);
+      } catch (err) {
+        console.error('Failed to analyze MTF on ROI:', err);
+      }
+    },
+    []
+  );
 
   // 加载初始预设样张
-  const loadPreset = useCallback(async (preset: SamplePreset) => {
-    try {
-      const img = await preset.generator();
-      setImage(img);
-      setFileName(preset.name);
-      setIsSynthetic(true);
+  const loadPreset = useCallback(
+    async (preset: SamplePreset) => {
+      try {
+        const img = await preset.generator();
+        setImage(img);
+        setFileName(preset.name);
+        setIsSynthetic(true);
+        setExifResult(null);
 
-      const rw = Math.min(220, Math.floor((img.naturalWidth || 800) * 0.3));
-      const rh = Math.min(220, Math.floor((img.naturalHeight || 600) * 0.3));
-      const defaultRoi: ROI = {
-        x: Math.floor(((img.naturalWidth || 800) - rw) / 2),
-        y: Math.floor(((img.naturalHeight || 600) - rh) / 2),
-        w: rw,
-        h: rh,
-      };
-      setRoi(defaultRoi);
-      processImageAnalysis(img, defaultRoi);
-    } catch (err) {
-      console.error('Failed to load sample preset:', err);
-    }
-  }, [processImageAnalysis]);
+        const rw = Math.min(220, Math.floor((img.naturalWidth || 800) * 0.3));
+        const rh = Math.min(220, Math.floor((img.naturalHeight || 600) * 0.3));
+        const defaultRoi: ROI = {
+          x: Math.floor(((img.naturalWidth || 800) - rw) / 2),
+          y: Math.floor(((img.naturalHeight || 600) - rh) / 2),
+          w: rw,
+          h: rh,
+        };
+        setRoi(defaultRoi);
+        processImageAnalysis(img, defaultRoi, null);
+      } catch (err) {
+        console.error('Failed to load sample preset:', err);
+      }
+    },
+    [processImageAnalysis]
+  );
 
   // 初始化加载默认样张 (ISO 12233 标板样张)
   useEffect(() => {
     loadPreset(SAMPLE_PRESETS[0]);
   }, [loadPreset]);
 
-  // 处理本地图片上传
-  const handleFileUpload = (file: File) => {
+  // 处理本地图片上传 (包括 EXIF 全量提取)
+  const handleFileUpload = async (file: File) => {
+    // 异步解析 EXIF 元数据
+    let parsed: ParsedExifResult | null = null;
+    try {
+      parsed = await parsePhotoExif(file);
+      setExifResult(parsed);
+    } catch (err) {
+      console.warn('Failed to parse EXIF from file:', err);
+      setExifResult(null);
+    }
+
     const reader = new FileReader();
     reader.onload = (e) => {
       const img = new Image();
@@ -119,7 +148,7 @@ export const App: React.FC = () => {
           h: rh,
         };
         setRoi(defaultRoi);
-        processImageAnalysis(img, defaultRoi);
+        processImageAnalysis(img, defaultRoi, parsed);
       };
       if (typeof e.target?.result === 'string') {
         img.src = e.target.result;
@@ -156,6 +185,8 @@ export const App: React.FC = () => {
         onFileUpload={handleFileUpload}
         onSelectSample={loadPreset}
         onToggleGuide={() => setIsGuideOpen(true)}
+        onOpenExif={() => setIsExifModalOpen(true)}
+        exifResult={exifResult}
         fileName={fileName}
         isSynthetic={isSynthetic}
       />
@@ -202,6 +233,7 @@ export const App: React.FC = () => {
               onHoverZone={setActiveZoneId}
               onSelectEdge={handleSelectEdge}
               onSwitchToEdgeMode={() => setMode('slanted_edge')}
+              onOpenExif={() => setIsExifModalOpen(true)}
             />
           ) : (
             /* 模式 2: 专业斜边 MTF / SFR 测量面板 */
@@ -340,6 +372,14 @@ export const App: React.FC = () => {
 
       {/* 原理说明弹窗 */}
       <GuideModal isOpen={isGuideOpen} onClose={() => setIsGuideOpen(false)} />
+
+      {/* EXIF 元数据查看与导出弹窗 */}
+      <ExifViewerModal
+        isOpen={isExifModalOpen}
+        onClose={() => setIsExifModalOpen(false)}
+        exifResult={exifResult}
+        fileName={fileName}
+      />
     </div>
   );
 };

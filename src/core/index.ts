@@ -12,6 +12,7 @@ export * from './esfLsf';
 export * from './dft';
 export * from './lensQuality';
 export * from './autoEdgeDetector';
+export * from './exifReader';
 
 /**
  * 执行完整的 ISO 12233 斜边分析管线

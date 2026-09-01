@@ -20,6 +20,7 @@ interface LensOverviewPanelProps {
   onHoverZone: (zoneId: string | null) => void;
   onSelectEdge: (edge: DetectedEdge) => void;
   onSwitchToEdgeMode: () => void;
+  onOpenExif?: () => void;
 }
 
 export const LensOverviewPanel: React.FC<LensOverviewPanelProps> = ({
@@ -29,6 +30,7 @@ export const LensOverviewPanel: React.FC<LensOverviewPanelProps> = ({
   onHoverZone,
   onSelectEdge,
   onSwitchToEdgeMode,
+  onOpenExif,
 }) => {
   if (!lensResult) {
     return (
@@ -58,6 +60,10 @@ export const LensOverviewPanel: React.FC<LensOverviewPanelProps> = ({
     centerSharpness,
     cornerAvgSharpness,
     edgeFalloffPct,
+    overshootPct,
+    isOversharpened,
+    lwphEstimate,
+    textureConfidence,
     zones,
     chromaticAberration,
     vignetting,
@@ -182,6 +188,64 @@ export const LensOverviewPanel: React.FC<LensOverviewPanelProps> = ({
             <span style={{ fontSize: '14px', color: 'var(--text-muted)', fontWeight: 600 }}>/ 100</span>
           </div>
           <span style={{ fontSize: '11px', color: 'var(--text-dim)', marginTop: '2px' }}>镜头综合评分</span>
+        </div>
+      </div>
+
+      {/* 1.5. 真实光学特性与计算摄影白边检测条 */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '10px 14px',
+          borderRadius: '10px',
+          backgroundColor: isOversharpened
+            ? 'rgba(245, 158, 11, 0.12)'
+            : 'rgba(56, 189, 248, 0.1)',
+          border: `1px solid ${
+            isOversharpened ? 'rgba(245, 158, 11, 0.3)' : 'rgba(56, 189, 248, 0.25)'
+          }`,
+          fontSize: '12px',
+          flexWrap: 'wrap',
+          gap: '8px',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          {isOversharpened ? (
+            <AlertCircle size={16} color="#f59e0b" style={{ flexShrink: 0 }} />
+          ) : (
+            <Sparkles size={16} color="#38bdf8" style={{ flexShrink: 0 }} />
+          )}
+          <span style={{ color: isOversharpened ? '#fcd34d' : '#e2e8f0' }}>
+            {isOversharpened
+              ? `检测到机内计算摄影强锐化 (边缘过冲 +${overshootPct}%)，已校准去除非光学虚高`
+              : `纯正光学阶跃响应 (边缘过冲 ${overshootPct}%)，无人工锐化白边`}
+          </span>
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', color: 'var(--text-muted)', fontSize: '11px' }}>
+          <span>
+            估计解析力: <strong style={{ color: '#fff' }}>{lwphEstimate} LW/PH</strong>
+          </span>
+          <span>
+            纹理置信度: <strong style={{ color: '#38bdf8' }}>{textureConfidence}%</strong>
+          </span>
+          {onOpenExif && (
+            <button
+              onClick={onOpenExif}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: 'var(--accent-color)',
+                cursor: 'pointer',
+                textDecoration: 'underline',
+                padding: 0,
+                fontSize: '11px',
+              }}
+            >
+              查看机身镜头 EXIF
+            </button>
+          )}
         </div>
       </div>
 

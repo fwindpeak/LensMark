@@ -28,12 +28,14 @@ export interface ZoneMetric {
   id: 'center' | 'top_left' | 'top_right' | 'bottom_left' | 'bottom_right' | 'top' | 'bottom' | 'left' | 'right';
   name: string;
   shortName: string;
-  sharpness: number; // 0 ~ 100
+  sharpness: number; // 0 ~ 100 综合锐度分
   tenengrad: number;
   laplacianVar: number;
   colorFringingPx: number; // Sub-pixel CA delta in px
   relativeIllumination: number; // 0 ~ 100%
   roi: ROI;
+  hasTexture?: boolean; // 该区域是否包含有效结构/焦点纹理
+  overshootPct?: number; // 过冲/锐化光晕比例 (%)
 }
 
 export interface ChromaticAberrationResult {
@@ -68,6 +70,12 @@ export interface LensQualityResult {
   centerSharpness: number; // 0 ~ 100
   cornerAvgSharpness: number; // 0 ~ 100
   edgeFalloffPct: number; // 边缘解析力衰减率 (%)
+  
+  // 计算摄影与真实光学鉴别
+  overshootPct: number; // 全图平均边缘过冲率 (%)
+  isOversharpened: boolean; // 是否检测到机内计算摄影/过度锐化白边
+  lwphEstimate: number; // 估计总画面解析力 (Line Widths / Picture Height)
+  textureConfidence: number; // 画面有效可评估纹理置信度 (0~100%)
   
   // 分区矩阵 (9 宫格 / 5 关键区)
   zones: ZoneMetric[];

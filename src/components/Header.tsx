@@ -9,7 +9,9 @@ import {
   Crop,
 } from 'lucide-react';
 import { AnalysisMode } from '../types/mtf';
+import { ParsedExifResult } from '../types/exif';
 import { SAMPLE_PRESETS, SamplePreset } from '../core/sampleImages';
+import { ExifBadge } from './ExifBadge';
 
 interface HeaderProps {
   mode: AnalysisMode;
@@ -17,6 +19,8 @@ interface HeaderProps {
   onFileUpload: (file: File) => void;
   onSelectSample: (preset: SamplePreset) => void;
   onToggleGuide: () => void;
+  onOpenExif?: () => void;
+  exifResult?: ParsedExifResult | null;
   fileName?: string;
   isSynthetic?: boolean;
 }
@@ -27,6 +31,8 @@ export const Header: React.FC<HeaderProps> = ({
   onFileUpload,
   onSelectSample,
   onToggleGuide,
+  onOpenExif,
+  exifResult,
   fileName,
   isSynthetic,
 }) => {
@@ -103,6 +109,11 @@ export const Header: React.FC<HeaderProps> = ({
               >
                 {fileName}
               </span>
+            )}
+
+            {/* EXIF 参数与详情入口徽章 */}
+            {onOpenExif && (
+              <ExifBadge exifResult={exifResult || null} onOpenExifModal={onOpenExif} />
             )}
           </div>
           <p
