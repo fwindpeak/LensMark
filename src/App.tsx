@@ -303,7 +303,16 @@ export const App: React.FC = () => {
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh', backgroundColor: 'var(--bg-color)' }}>
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        height: '100vh',
+        width: '100vw',
+        overflow: 'hidden',
+        backgroundColor: 'var(--bg-color)',
+      }}
+    >
       {/* 顶部导航 */}
       <Header
         mode={mode}
@@ -321,10 +330,12 @@ export const App: React.FC = () => {
       <main
         style={{
           display: 'grid',
-          gridTemplateColumns: 'minmax(0, 1.25fr) minmax(440px, 500px)',
-          gap: '20px',
-          padding: '20px 24px',
+          gridTemplateColumns: 'minmax(0, 1fr) minmax(440px, 480px)',
+          gap: '16px',
+          padding: '16px 20px',
           flex: 1,
+          minHeight: 0,
+          overflow: 'hidden',
           alignItems: 'stretch',
         }}
       >
@@ -348,8 +359,19 @@ export const App: React.FC = () => {
           onSelectDetectedEdge={handleSelectEdge}
         />
 
-        {/* 右侧面板 */}
-        <aside style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+        {/* 右侧面板 (独立垂直滚动) */}
+        <aside
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '16px',
+            height: '100%',
+            overflowY: 'auto',
+            overflowX: 'hidden',
+            paddingRight: '6px',
+            paddingBottom: '16px',
+          }}
+        >
           {/* 模式 1: 照片技术质量报告 */}
           {mode === 'photo_quality' && (
             <PhotoQualityReport report={photoReport} />

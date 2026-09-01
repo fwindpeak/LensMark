@@ -401,9 +401,11 @@ export const ImageWorkspace: React.FC<ImageWorkspaceProps> = ({
         flex: 1,
         display: 'flex',
         flexDirection: 'column',
-        padding: '16px',
+        padding: '14px 16px',
         position: 'relative',
-        minHeight: '560px',
+        height: '100%',
+        minHeight: 0,
+        overflow: 'hidden',
       }}
     >
       {/* 视口顶部工具栏 */}
@@ -570,8 +572,10 @@ export const ImageWorkspace: React.FC<ImageWorkspaceProps> = ({
         onDrop={handleDrop}
         style={{
           flex: 1,
+          minHeight: 0,
+          minWidth: 0,
           marginTop: '12px',
-          backgroundColor: '#000000',
+          backgroundColor: '#050914',
           borderRadius: '8px',
           overflow: 'hidden',
           position: 'relative',
@@ -611,6 +615,8 @@ export const ImageWorkspace: React.FC<ImageWorkspaceProps> = ({
           style={{
             maxWidth: '100%',
             maxHeight: '100%',
+            width: 'auto',
+            height: 'auto',
             objectFit: 'contain',
             display: 'block',
             userSelect: 'none',
