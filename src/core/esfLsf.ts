@@ -7,6 +7,7 @@ export interface EsfLsfData {
 
 /**
  * 依据拟合斜边直线构建 4 倍超采样 ESF，并求导加窗生成 LSF
+ * 支持近垂直 (isVertical = true) 与近水平 (isVertical = false) 两种投影
  */
 export function buildEsfAndLsf(
   gray: Float64Array,
@@ -14,26 +15,43 @@ export function buildEsfAndLsf(
   height: number,
   k: number,
   b: number,
+  isVertical = true,
   oversampling = 4,
   winLen = 128
 ): EsfLsfData {
-  const maxDist = Math.floor(width / 2);
+  const maxDim = isVertical ? width : height;
+  const maxDist = Math.floor(maxDim / 2);
   const numBins = maxDist * 2 * oversampling;
   const binsSum = new Float64Array(numBins);
   const binsCount = new Int32Array(numBins);
 
   const cosTheta = Math.cos(Math.atan(k));
 
-  for (let y = 0; y < height; y++) {
-    const edgeX = k * y + b;
-    const rowOffset = y * width;
+  if (isVertical) {
+    // 垂直斜边：按行遍历，计算水平距离
+    for (let y = 0; y < height; y++) {
+      const edgeX = k * y + b;
+      const rowOffset = y * width;
+      for (let x = 0; x < width; x++) {
+        const dist = (x - edgeX) * cosTheta;
+        const binIdx = Math.floor((dist + maxDist) * oversampling);
+        if (binIdx >= 0 && binIdx < numBins) {
+          binsSum[binIdx] += gray[rowOffset + x];
+          binsCount[binIdx]++;
+        }
+      }
+    }
+  } else {
+    // 水平斜边：按列遍历，计算垂直距离
     for (let x = 0; x < width; x++) {
-      // 计算到拟合斜边的法向投影距离
-      const dist = (x - edgeX) * cosTheta;
-      const binIdx = Math.floor((dist + maxDist) * oversampling);
-      if (binIdx >= 0 && binIdx < numBins) {
-        binsSum[binIdx] += gray[rowOffset + x];
-        binsCount[binIdx]++;
+      const edgeY = k * x + b;
+      for (let y = 0; y < height; y++) {
+        const dist = (y - edgeY) * cosTheta;
+        const binIdx = Math.floor((dist + maxDist) * oversampling);
+        if (binIdx >= 0 && binIdx < numBins) {
+          binsSum[binIdx] += gray[y * width + x];
+          binsCount[binIdx]++;
+        }
       }
     }
   }

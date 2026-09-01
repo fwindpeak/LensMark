@@ -1,3 +1,5 @@
+export type AnalysisMode = 'overview' | 'slanted_edge';
+
 export interface ROI {
   x: number;
   y: number;
@@ -10,6 +12,7 @@ export interface MTFResult {
   angleDeg: number;
   k: number;
   b: number;
+  isVerticalEdge?: boolean;
   mtf50: number; // in cycles/pixel (c/p)
   mtf: number[]; // MTF values normalized from DC=1.0
   esf: number[]; // 4x oversampled Edge Spread Function
@@ -21,10 +24,88 @@ export interface MTFResult {
   errorMessage?: string;
 }
 
+export interface ZoneMetric {
+  id: 'center' | 'top_left' | 'top_right' | 'bottom_left' | 'bottom_right' | 'top' | 'bottom' | 'left' | 'right';
+  name: string;
+  shortName: string;
+  sharpness: number; // 0 ~ 100
+  tenengrad: number;
+  laplacianVar: number;
+  colorFringingPx: number; // Sub-pixel CA delta in px
+  relativeIllumination: number; // 0 ~ 100%
+  roi: ROI;
+}
+
+export interface ChromaticAberrationResult {
+  averageCaPx: number; // 平均色散错位宽度 (px)
+  maxCaPx: number; // 最大色散错位宽度 (px)
+  fringeRatio: number; // 紫边/彩边像素比例 (%)
+  grade: '极佳 (无明显色散)' | '良好 (轻微色散)' | '中等 (可见紫边)' | '较重 (明显色边)';
+}
+
+export interface VignettingResult {
+  centerLuminance: number; // 中心平均亮度
+  cornerLuminance: number; // 四角平均亮度
+  relativeIlluminationPct: number; // 相对照度 %
+  evLoss: number; // 边角曝光损失 EV
+  grade: '均匀' | '轻微暗角' | '中等暗角' | '显著暗角';
+}
+
+export interface HeatmapGrid {
+  cols: number;
+  rows: number;
+  data: Float32Array; // 归一化 0.0 ~ 1.0 清晰度热力值
+  minVal: number;
+  maxVal: number;
+}
+
+export interface LensQualityResult {
+  overallScore: number; // 0 ~ 100 综合得分
+  gradeLevel: 'S' | 'A' | 'B' | 'C' | 'D';
+  gradeTitle: string; // e.g. "卓越旗舰级"
+  
+  // 核心分项指标
+  centerSharpness: number; // 0 ~ 100
+  cornerAvgSharpness: number; // 0 ~ 100
+  edgeFalloffPct: number; // 边缘解析力衰减率 (%)
+  
+  // 分区矩阵 (9 宫格 / 5 关键区)
+  zones: ZoneMetric[];
+  
+  // 色散与暗角
+  chromaticAberration: ChromaticAberrationResult;
+  vignetting: VignettingResult;
+  
+  // 热力图数据
+  heatmap: HeatmapGrid;
+  
+  // 智能光学诊断建议
+  diagnosisSummary: string;
+  recommendations: string[];
+}
+
+export interface DetectedEdge {
+  id: string;
+  roi: ROI;
+  angleDeg: number;
+  isVertical: boolean;
+  contrast: number; // 边缘对比度 (0~1)
+  mtf50: number; // 计算所得 MTF50
+  zoneName: string; // '中心' | '左上' | '右上' | '左下' | '右下' | '边缘'
+  score: number;
+}
+
 export interface AnalysisState {
   image: HTMLImageElement | null;
   imageName: string;
+  mode: AnalysisMode;
   roi: ROI;
-  result: MTFResult | null;
+  mtfResult: MTFResult | null;
+  lensQualityResult: LensQualityResult | null;
+  detectedEdges: DetectedEdge[];
+  selectedEdgeId: string | null;
+  showHeatmap: boolean;
+  heatmapOpacity: number;
+  showEdgeBadges: boolean;
   isAnalyzing: boolean;
 }

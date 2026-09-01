@@ -5,10 +5,13 @@ import { buildEsfAndLsf } from './esfLsf';
 import { computeMtfFromLsf } from './dft';
 
 export * from './synthetic';
+export * from './sampleImages';
 export * from './grayscale';
 export * from './edgeDetection';
 export * from './esfLsf';
 export * from './dft';
+export * from './lensQuality';
+export * from './autoEdgeDetector';
 
 /**
  * 执行完整的 ISO 12233 斜边分析管线
@@ -39,7 +42,7 @@ export function analyzeMtf(
     // 1. 提取物理线性灰度
     const { gray, width, height } = extractLinearGrayscale(imageSource, roi);
 
-    // 2. 边缘导数质心与直线方程拟合
+    // 2. 边缘导数质心与直线方程拟合 (自适应垂直与水平方向)
     const fitted = fitSlantedEdge(gray, width, height);
     if (!fitted) {
       return {
@@ -55,7 +58,7 @@ export function analyzeMtf(
         oversampling: 4,
         edgeCount: 0,
         totalRows: height,
-        errorMessage: '边缘反差过低或未能检出清晰倾斜边缘',
+        errorMessage: '选区内未检出高反差倾斜边缘 (支持近垂直或近水平斜边)',
       };
     }
 
@@ -68,6 +71,7 @@ export function analyzeMtf(
       height,
       fitted.k,
       fitted.b,
+      fitted.isVertical,
       oversampling,
       winLen
     );
@@ -80,6 +84,7 @@ export function analyzeMtf(
       angleDeg: fitted.angleDeg,
       k: fitted.k,
       b: fitted.b,
+      isVerticalEdge: fitted.isVertical,
       mtf50,
       mtf,
       esf,
@@ -87,7 +92,7 @@ export function analyzeMtf(
       winLen,
       oversampling,
       edgeCount: fitted.validRowCount,
-      totalRows: height,
+      totalRows: fitted.totalRows,
     };
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : '分析过程发生未知异常';

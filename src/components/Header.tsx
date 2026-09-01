@@ -1,28 +1,42 @@
-import React, { useRef } from 'react';
-import { Upload, Sparkles, HelpCircle, Activity } from 'lucide-react';
+import React, { useRef, useState } from 'react';
+import {
+  Upload,
+  Sparkles,
+  HelpCircle,
+  Activity,
+  ChevronDown,
+  Maximize2,
+  Crop,
+} from 'lucide-react';
+import { AnalysisMode } from '../types/mtf';
+import { SAMPLE_PRESETS, SamplePreset } from '../core/sampleImages';
 
 interface HeaderProps {
+  mode: AnalysisMode;
+  onModeChange: (mode: AnalysisMode) => void;
   onFileUpload: (file: File) => void;
-  onGenerateSynthetic: () => void;
+  onSelectSample: (preset: SamplePreset) => void;
   onToggleGuide: () => void;
   fileName?: string;
   isSynthetic?: boolean;
 }
 
 export const Header: React.FC<HeaderProps> = ({
+  mode,
+  onModeChange,
   onFileUpload,
-  onGenerateSynthetic,
+  onSelectSample,
   onToggleGuide,
   fileName,
   isSynthetic,
 }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [showPresetsMenu, setShowPresetsMenu] = useState(false);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
       onFileUpload(file);
-      // 重置 input 以允许连续上传相同文件
       e.target.value = '';
     }
   };
@@ -33,16 +47,19 @@ export const Header: React.FC<HeaderProps> = ({
         display: 'flex',
         justifyContent: 'space-between',
         alignItems: 'center',
-        padding: '16px 24px',
+        padding: '12px 24px',
         borderBottom: '1px solid var(--border-color)',
         backgroundColor: 'var(--bg-surface)',
+        flexWrap: 'wrap',
+        gap: '12px',
       }}
     >
-      <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+      {/* 品牌与标题 */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
         <div
           style={{
-            width: '40px',
-            height: '40px',
+            width: '38px',
+            height: '38px',
             borderRadius: '10px',
             background: 'linear-gradient(135deg, #0284c7 0%, #38bdf8 100%)',
             display: 'flex',
@@ -50,6 +67,7 @@ export const Header: React.FC<HeaderProps> = ({
             justifyContent: 'center',
             color: '#fff',
             boxShadow: '0 0 16px var(--accent-glow)',
+            flexShrink: 0,
           }}
         >
           <Activity size={22} strokeWidth={2.5} />
@@ -58,25 +76,29 @@ export const Header: React.FC<HeaderProps> = ({
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
             <h1
               style={{
-                fontSize: '18px',
+                fontSize: '16px',
                 fontWeight: 700,
                 letterSpacing: '-0.02em',
                 color: '#fff',
                 margin: 0,
               }}
             >
-              ISO 12233 浏览器端斜边 MTF / SFR 测量分析器
+              LensOptics 镜头成像质量评估与 MTF 分析器
             </h1>
             {fileName && (
               <span
                 style={{
-                  fontSize: '12px',
+                  fontSize: '11px',
                   padding: '2px 8px',
-                  borderRadius: '12px',
+                  borderRadius: '10px',
                   backgroundColor: isSynthetic ? 'rgba(56, 189, 248, 0.15)' : 'rgba(74, 222, 128, 0.15)',
                   color: isSynthetic ? 'var(--accent-color)' : 'var(--success-color)',
-                  border: `1px solid ${isSynthetic ? 'var(--accent-color)' : 'var(--success-color)'}`,
+                  border: `1px solid ${isSynthetic ? 'rgba(56, 189, 248, 0.3)' : 'rgba(74, 222, 128, 0.3)'}`,
                   fontWeight: 500,
+                  maxWidth: '220px',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
                 }}
               >
                 {fileName}
@@ -85,38 +107,164 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
           <p
             style={{
-              fontSize: '13px',
+              fontSize: '12px',
               color: 'var(--text-muted)',
-              margin: '4px 0 0 0',
+              margin: '2px 0 0 0',
             }}
           >
-            纯前端物理光强线性化 · 亚像素导数质心拟合 · 4x 超采样 ESF · 汉宁窗 LSF 频域解算
+            免标板实拍镜头素质评估 · 清晰度热力图 · 9 像场对比 · 色散紫边/暗角检测 · ISO 12233 斜边测量
           </p>
         </div>
       </div>
 
-      <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+      {/* 核心操作工具栏 */}
+      <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
+        {/* 模式分段切换器 */}
+        <div
+          style={{
+            display: 'flex',
+            backgroundColor: 'rgba(15, 23, 42, 0.8)',
+            padding: '3px',
+            borderRadius: '8px',
+            border: '1px solid var(--border-color)',
+          }}
+        >
+          <button
+            onClick={() => onModeChange('overview')}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '6px 12px',
+              borderRadius: '6px',
+              border: 'none',
+              fontSize: '12px',
+              fontWeight: 600,
+              cursor: 'pointer',
+              backgroundColor: mode === 'overview' ? 'var(--accent-color)' : 'transparent',
+              color: mode === 'overview' ? '#0b1120' : 'var(--text-muted)',
+              transition: 'all 0.2s',
+            }}
+          >
+            <Maximize2 size={13} />
+            🌟 镜头综合质量评估
+          </button>
+          <button
+            onClick={() => onModeChange('slanted_edge')}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '6px 12px',
+              borderRadius: '6px',
+              border: 'none',
+              fontSize: '12px',
+              fontWeight: 600,
+              cursor: 'pointer',
+              backgroundColor: mode === 'slanted_edge' ? 'var(--accent-color)' : 'transparent',
+              color: mode === 'slanted_edge' ? '#0b1120' : 'var(--text-muted)',
+              transition: 'all 0.2s',
+            }}
+          >
+            <Crop size={13} />
+            🔬 专业斜边 MTF 测量
+          </button>
+        </div>
+
+        {/* 预设样张体验下拉菜单 */}
+        <div style={{ position: 'relative' }}>
+          <button
+            onClick={() => setShowPresetsMenu(!showPresetsMenu)}
+            style={{
+              backgroundColor: 'var(--card-bg)',
+              color: 'var(--text-color)',
+              border: '1px solid var(--border-color)',
+              padding: '7px 12px',
+              borderRadius: '8px',
+              fontSize: '12px',
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              transition: 'all 0.2s',
+            }}
+          >
+            <Sparkles size={14} color="var(--accent-color)" />
+            预设样张体验
+            <ChevronDown size={12} />
+          </button>
+
+          {showPresetsMenu && (
+            <div
+              style={{
+                position: 'absolute',
+                top: 'calc(100% + 6px)',
+                right: 0,
+                width: '240px',
+                backgroundColor: 'var(--bg-surface)',
+                border: '1px solid var(--border-color)',
+                borderRadius: '8px',
+                padding: '6px',
+                boxShadow: '0 10px 25px rgba(0,0,0,0.5)',
+                zIndex: 50,
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '4px',
+              }}
+            >
+              {SAMPLE_PRESETS.map((preset) => (
+                <button
+                  key={preset.id}
+                  onClick={() => {
+                    onSelectSample(preset);
+                    setShowPresetsMenu(false);
+                  }}
+                  style={{
+                    backgroundColor: 'transparent',
+                    border: 'none',
+                    borderRadius: '6px',
+                    padding: '8px 10px',
+                    textAlign: 'left',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '2px',
+                    color: 'var(--text-color)',
+                    transition: 'background-color 0.15s',
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'rgba(56, 189, 248, 0.1)')}
+                  onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+                >
+                  <span style={{ fontSize: '12px', fontWeight: 600, color: '#fff' }}>{preset.name}</span>
+                  <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{preset.description}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* 导入照片按钮 */}
         <button
           onClick={() => fileInputRef.current?.click()}
           style={{
             backgroundColor: 'var(--accent-color)',
             color: '#0b1120',
             border: 'none',
-            padding: '8px 16px',
+            padding: '7px 14px',
             borderRadius: '8px',
-            fontSize: '13px',
+            fontSize: '12px',
             fontWeight: 600,
             cursor: 'pointer',
             display: 'inline-flex',
             alignItems: 'center',
-            gap: '8px',
+            gap: '6px',
             transition: 'all 0.2s',
           }}
           onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'var(--accent-hover)')}
           onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'var(--accent-color)')}
         >
-          <Upload size={16} strokeWidth={2.5} />
-          导入照片 (JPG/PNG/TIFF)
+          <Upload size={14} strokeWidth={2.5} />
+          导入实拍照片
         </button>
         <input
           ref={fileInputRef}
@@ -126,44 +274,16 @@ export const Header: React.FC<HeaderProps> = ({
           onChange={handleFileChange}
         />
 
-        <button
-          onClick={onGenerateSynthetic}
-          style={{
-            backgroundColor: 'var(--card-bg)',
-            color: 'var(--text-color)',
-            border: '1px solid var(--border-color)',
-            padding: '8px 14px',
-            borderRadius: '8px',
-            fontSize: '13px',
-            cursor: 'pointer',
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: '6px',
-            transition: 'all 0.2s',
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.borderColor = 'var(--accent-color)';
-            e.currentTarget.style.color = 'var(--accent-color)';
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.borderColor = 'var(--border-color)';
-            e.currentTarget.style.color = 'var(--text-color)';
-          }}
-        >
-          <Sparkles size={15} />
-          生成模拟斜边
-        </button>
-
+        {/* 帮助与说明 */}
         <button
           onClick={onToggleGuide}
-          title="使用说明与原理"
+          title="使用说明与算法原理"
           style={{
             backgroundColor: 'transparent',
             color: 'var(--text-muted)',
             border: '1px solid var(--border-color)',
-            padding: '8px',
+            padding: '7px',
             borderRadius: '8px',
-            fontSize: '13px',
             cursor: 'pointer',
             display: 'inline-flex',
             alignItems: 'center',
@@ -179,7 +299,7 @@ export const Header: React.FC<HeaderProps> = ({
             e.currentTarget.style.borderColor = 'var(--border-color)';
           }}
         >
-          <HelpCircle size={18} />
+          <HelpCircle size={16} />
         </button>
       </div>
     </header>
