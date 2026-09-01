@@ -1,0 +1,713 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Web Slanted-Edge MTF / SFR 分析器</title>
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --card-bg: #1e293b;
+            --text-color: #f8fafc;
+            --text-muted: #94a3b8;
+            --accent-color: #38bdf8;
+            --accent-hover: #0284c7;
+            --border-color: #334155;
+            --success-color: #4ade80;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            user-select: none;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            min-height: 100vh;
+            padding: 24px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 16px;
+        }
+
+        header h1 {
+            font-size: 20px;
+            font-weight: 600;
+            letter-spacing: -0.02em;
+        }
+
+        header .subtitle {
+            font-size: 13px;
+            color: var(--text-muted);
+            margin-top: 4px;
+        }
+
+        .actions {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+        }
+
+        .btn {
+            background-color: var(--card-bg);
+            color: var(--text-color);
+            border: 1px solid var(--border-color);
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-size: 13px;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .btn:hover {
+            border-color: var(--accent-color);
+            color: var(--accent-color);
+        }
+
+        .btn-primary {
+            background-color: var(--accent-color);
+            color: #000;
+            border: none;
+            font-weight: 500;
+        }
+
+        .btn-primary:hover {
+            background-color: var(--accent-hover);
+            color: #fff;
+        }
+
+        input[type="file"] {
+            display: none;
+        }
+
+        .workspace {
+            display: grid;
+            grid-template-columns: 1fr 420px;
+            gap: 20px;
+            flex: 1;
+        }
+
+        .card {
+            background-color: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            position: relative;
+        }
+
+        .card-header {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .canvas-container {
+            flex: 1;
+            min-height: 480px;
+            background-color: #000;
+            border-radius: 6px;
+            overflow: hidden;
+            position: relative;
+            cursor: crosshair;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        #imageCanvas {
+            max-width: 100%;
+            max-height: 100%;
+            display: block;
+        }
+
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+
+        .metric-box {
+            background-color: rgba(15, 23, 42, 0.6);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            padding: 12px;
+        }
+
+        .metric-box .label {
+            font-size: 12px;
+            color: var(--text-muted);
+            margin-bottom: 4px;
+        }
+
+        .metric-box .val {
+            font-size: 22px;
+            font-weight: 700;
+            color: var(--accent-color);
+            font-family: monospace;
+        }
+
+        .metric-box .unit {
+            font-size: 12px;
+            font-weight: normal;
+            color: var(--text-muted);
+            margin-left: 4px;
+        }
+
+        .chart-box {
+            background-color: rgba(15, 23, 42, 0.6);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            padding: 8px;
+            height: 170px;
+            position: relative;
+        }
+
+        .chart-box canvas {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+
+        .chart-title {
+            position: absolute;
+            top: 8px;
+            left: 12px;
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--text-muted);
+        }
+
+        .instructions {
+            font-size: 12px;
+            color: var(--text-muted);
+            line-height: 1.6;
+            border-top: 1px solid var(--border-color);
+            padding-top: 12px;
+        }
+
+        .instructions strong {
+            color: var(--text-color);
+        }
+    </style>
+</head>
+
+<body>
+
+    <header>
+        <div>
+            <h1>ISO 12233 浏览器端斜边 MTF / SFR 测量工具</h1>
+            <div class="subtitle">纯本地 Canvas/JS 计算 · 零数据上传 · 亚像素拟合与超采样分析</div>
+        </div>
+        <div class="actions">
+            <label class="btn btn-primary" for="fileInput">
+                📁 导入照片 (JPG/PNG/TIFF)
+            </label>
+            <input type="file" id="fileInput" accept="image/*">
+            <button class="btn" id="btnResetEdge">生成模拟斜边</button>
+        </div>
+    </header>
+
+    <div class="workspace">
+        <div class="card">
+            <div class="card-header">
+                <span>图像视口 & ROI 框选</span>
+                <span style="font-size: 12px; text-transform: none; color: var(--accent-color);"
+                    id="roiInfo">按住鼠标左键在斜边区域拖拽框选</span>
+            </div>
+            <div class="canvas-container" id="container">
+                <canvas id="imageCanvas"></canvas>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header">测量指标与函数曲线</div>
+
+            <div class="metrics-grid">
+                <div class="metric-box">
+                    <div class="label">MTF50 锐度指标</div>
+                    <div class="val" id="valMtf50">--<span class="unit">c/p</span></div>
+                </div>
+                <div class="metric-box">
+                    <div class="label">斜边倾斜角度</div>
+                    <div class="val" id="valAngle">--<span class="unit">°</span></div>
+                </div>
+            </div>
+
+            <div class="chart-box">
+                <div class="chart-title">MTF / SFR 调制传递函数曲线</div>
+                <canvas id="chartMtf"></canvas>
+            </div>
+
+            <div class="chart-box">
+                <div class="chart-title">ESF (边缘扩展) & LSF (线扩散)</div>
+                <canvas id="chartEsfLsf"></canvas>
+            </div>
+
+            <div class="instructions">
+                <strong>使用说明：</strong><br>
+                1. 建议导入已关闭所有锐化与降噪的无损切片。<br>
+                2. 鼠标框选时，确保选区完整跨越一段**5°~10°**的倾斜黑白边缘，且边缘两端有充足的纯白/纯黑缓冲区。<br>
+                3. MTF50 指的是对比度降至 50% 时对应的空间频率（cycles/pixel），数值越高解析力越强。
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const imageCanvas = document.getElementById('imageCanvas');
+        const imgCtx = imageCanvas.getContext('2d');
+        const container = document.getElementById('container');
+        const fileInput = document.getElementById('fileInput');
+        const btnResetEdge = document.getElementById('btnResetEdge');
+
+        const chartMtf = document.getElementById('chartMtf');
+        const chartEsfLsf = document.getElementById('chartEsfLsf');
+        const mtfCtx = chartMtf.getContext('2d');
+        const esfLsfCtx = chartEsfLsf.getContext('2d');
+
+        const valMtf50 = document.getElementById('valMtf50');
+        const valAngle = document.getElementById('valAngle');
+        const roiInfo = document.getElementById('roiInfo');
+
+        let rawImage = null;
+        let isSelecting = false;
+        let startX = 0, startY = 0;
+        let roi = { x: 120, y: 80, w: 160, h: 240 }; // 默认选区
+
+        // 初始化尺寸适配
+        function resizeCanvas() {
+            [chartMtf, chartEsfLsf].forEach(c => {
+                c.width = c.parentElement.clientWidth;
+                c.height = c.parentElement.clientHeight;
+            });
+        }
+        window.addEventListener('resize', () => {
+            resizeCanvas();
+            if (rawImage) redraw();
+        });
+        resizeCanvas();
+
+        // 生成合成模拟斜边 (带高斯微模糊的 5.7 度斜边)
+        function generateSyntheticSlantedEdge() {
+            const w = 400, h = 400;
+            imageCanvas.width = w;
+            imageCanvas.height = h;
+
+            const imgData = imgCtx.createImageData(w, h);
+            const data = imgData.data;
+            const angleRad = (5.7 * Math.PI) / 180;
+            const tanTheta = Math.tan(angleRad);
+            const cx = w / 2;
+
+            for (let y = 0; y < h; y++) {
+                const edgeX = cx + (y - h / 2) * tanTheta;
+                for (let x = 0; x < w; x++) {
+                    const idx = (y * w + x) * 4;
+                    const dist = x - edgeX;
+                    // 误差函数模拟光学点扩散模糊 (PSF sigma ~ 1.2)
+                    const val = 20 + 215 * (0.5 + 0.5 * Math.tanh(dist / 1.5));
+                    data[idx] = val;
+                    data[idx + 1] = val;
+                    data[idx + 2] = val;
+                    data[idx + 3] = 255;
+                }
+            }
+            imgCtx.putImageData(imgData, 0, 0);
+
+            rawImage = new Image();
+            rawImage.src = imageCanvas.toDataURL();
+            rawImage.onload = () => {
+                roi = { x: 100, y: 80, w: 200, h: 240 };
+                redraw();
+                calculateMTF();
+            };
+        }
+
+        // 文件读取
+        fileInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = (evt) => {
+                const img = new Image();
+                img.onload = () => {
+                    rawImage = img;
+                    imageCanvas.width = img.naturalWidth;
+                    imageCanvas.height = img.naturalHeight;
+                    // 默认居中选取一块区域
+                    const rw = Math.min(200, Math.floor(img.naturalWidth * 0.4));
+                    const rh = Math.min(200, Math.floor(img.naturalHeight * 0.4));
+                    roi = {
+                        x: Math.floor((img.naturalWidth - rw) / 2),
+                        y: Math.floor((img.naturalHeight - rh) / 2),
+                        w: rw,
+                        h: rh
+                    };
+                    redraw();
+                    calculateMTF();
+                };
+                img.src = evt.target.result;
+            };
+            reader.readAsDataURL(file);
+        });
+
+        btnResetEdge.addEventListener('click', generateSyntheticSlantedEdge);
+
+        // 重绘图像与 ROI 选框
+        function redraw() {
+            if (!rawImage) return;
+            imgCtx.clearRect(0, 0, imageCanvas.width, imageCanvas.height);
+            imgCtx.drawImage(rawImage, 0, 0);
+
+            // 绘制 ROI 框
+            imgCtx.strokeStyle = '#38bdf8';
+            imgCtx.lineWidth = Math.max(1, Math.floor(imageCanvas.width / 400));
+            imgCtx.strokeRect(roi.x, roi.y, roi.w, roi.h);
+            imgCtx.fillStyle = 'rgba(56, 189, 248, 0.15)';
+            imgCtx.fillRect(roi.x, roi.y, roi.w, roi.h);
+
+            roiInfo.textContent = `选区: ${Math.round(roi.w)} × ${Math.round(roi.h)} px (X:${Math.round(roi.x)}, Y:${Math.round(roi.y)})`;
+        }
+
+        // 交互逻辑：选区拖拽
+        function getCanvasCoords(e) {
+            const rect = imageCanvas.getBoundingClientRect();
+            const scaleX = imageCanvas.width / rect.width;
+            const scaleY = imageCanvas.height / rect.height;
+            return {
+                x: (e.clientX - rect.left) * scaleX,
+                y: (e.clientY - rect.top) * scaleY
+            };
+        }
+
+        imageCanvas.addEventListener('mousedown', (e) => {
+            if (!rawImage) return;
+            isSelecting = true;
+            const pos = getCanvasCoords(e);
+            startX = pos.x;
+            startY = pos.y;
+            roi = { x: startX, y: startY, w: 0, h: 0 };
+        });
+
+        window.addEventListener('mousemove', (e) => {
+            if (!isSelecting) return;
+            const pos = getCanvasCoords(e);
+            roi.x = Math.max(0, Math.min(startX, pos.x));
+            roi.y = Math.max(0, Math.min(startY, pos.y));
+            roi.w = Math.min(imageCanvas.width - roi.x, Math.abs(pos.x - startX));
+            roi.h = Math.min(imageCanvas.height - roi.y, Math.abs(pos.y - startY));
+            redraw();
+        });
+
+        window.addEventListener('mouseup', () => {
+            if (!isSelecting) return;
+            isSelecting = false;
+            if (roi.w > 20 && roi.h > 20) {
+                calculateMTF();
+            }
+        });
+
+        // 核心 ISO 12233 斜边分析算法
+        function calculateMTF() {
+            if (!rawImage || roi.w < 10 || roi.h < 10) return;
+
+            // 1. 获取 ROI 内像素数据并转为线性灰度 (sRGB 线性化)
+            const rx = Math.floor(roi.x);
+            const ry = Math.floor(roi.y);
+            const rw = Math.floor(roi.w);
+            const rh = Math.floor(roi.h);
+
+            const srcCanvas = document.createElement('canvas');
+            srcCanvas.width = rw;
+            srcCanvas.height = rh;
+            const srcCtx = srcCanvas.getContext('2d');
+            srcCtx.drawImage(rawImage, rx, ry, rw, rh, 0, 0, rw, rh);
+            const imgData = srcCtx.getImageData(0, 0, rw, rh).data;
+
+            const gray = new Float64Array(rw * rh);
+            for (let i = 0; i < rw * rh; i++) {
+                const r = imgData[i * 4] / 255;
+                const g = imgData[i * 4 + 1] / 255;
+                const b = imgData[i * 4 + 2] / 255;
+                // ITU-R BT.709 权重 + Gamma 2.2 逆变换解算真实相对光强
+                const srgb = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+                gray[i] = Math.pow(srgb, 2.2);
+            }
+
+            // 2. 估计每一行的边缘中心 (Centroid of Derivative)
+            const edgeCentroids = [];
+            const rows = [];
+            for (let y = 0; y < rh; y++) {
+                let maxGrad = 0;
+                let sumWeight = 0;
+                let sumPos = 0;
+
+                for (let x = 1; x < rw - 1; x++) {
+                    const grad = Math.abs(gray[y * rw + (x + 1)] - gray[y * rw + (x - 1)]);
+                    if (grad > 0.05) { // 过滤平坦区噪点
+                        sumWeight += grad;
+                        sumPos += x * grad;
+                    }
+                    if (grad > maxGrad) maxGrad = grad;
+                }
+
+                if (sumWeight > 0 && maxGrad > 0.08) {
+                    edgeCentroids.push(sumPos / sumWeight);
+                    rows.push(y);
+                }
+            }
+
+            if (edgeCentroids.length < rh * 0.5) {
+                valAngle.textContent = "边缘反差过低";
+                valMtf50.textContent = "--";
+                return;
+            }
+
+            // 3. 最小二乘法拟合直线方程 x = k*y + b
+            let sumY = 0, sumX = 0, sumYY = 0, sumYX = 0;
+            const N = edgeCentroids.length;
+            for (let i = 0; i < N; i++) {
+                const y = rows[i];
+                const x = edgeCentroids[i];
+                sumY += y;
+                sumX += x;
+                sumYY += y * y;
+                sumYX += y * x;
+            }
+            const k = (N * sumYX - sumY * sumX) / (N * sumYY - sumY * sumY);
+            const b = (sumX - k * sumY) / N;
+
+            const angleDeg = Math.abs(Math.atan(k) * 180 / Math.PI);
+            valAngle.innerHTML = `${angleDeg.toFixed(2)}<span class="unit">°</span>`;
+
+            // 4. 构建 4 倍超采样 ESF (Edge Spread Function)
+            const oversampling = 4;
+            const binWidth = 1 / oversampling;
+            const maxDist = Math.floor(rw / 2);
+            const numBins = maxDist * 2 * oversampling;
+            const binsSum = new Float64Array(numBins);
+            const binsCount = new Int32Array(numBins);
+
+            const cosTheta = Math.cos(Math.atan(k));
+
+            for (let y = 0; y < rh; y++) {
+                const edgeX = k * y + b;
+                for (let x = 0; x < rw; x++) {
+                    // 到拟合斜边的法向距离
+                    const dist = (x - edgeX) * cosTheta;
+                    const binIdx = Math.floor((dist + maxDist) * oversampling);
+                    if (binIdx >= 0 && binIdx < numBins) {
+                        binsSum[binIdx] += gray[y * rw + x];
+                        binsCount[binIdx]++;
+                    }
+                }
+            }
+
+            // 归一化并插值补齐空缺 Bin
+            const esf = [];
+            for (let i = 0; i < numBins; i++) {
+                if (binsCount[i] > 0) {
+                    esf.push(binsSum[i] / binsCount[i]);
+                } else if (esf.length > 0) {
+                    esf.push(esf[esf.length - 1]);
+                } else {
+                    esf.push(0);
+                }
+            }
+
+            // 5. 差分求导获取 LSF (Line Spread Function) 并施加汉宁窗
+            const lsfLen = esf.length - 1;
+            const lsf = new Float64Array(lsfLen);
+            let lsfMaxIdx = 0;
+            let maxVal = -Infinity;
+
+            for (let i = 0; i < lsfLen; i++) {
+                lsf[i] = Math.abs(esf[i + 1] - esf[i]);
+                if (lsf[i] > maxVal) {
+                    maxVal = lsf[i];
+                    lsfMaxIdx = i;
+                }
+            }
+
+            // 裁剪以 LSF 峰值为中心的一段有效区域 (64点 * 4x = 256 点)
+            const winLen = 128;
+            const windowedLsf = new Float64Array(winLen);
+            const halfWin = winLen / 2;
+
+            for (let i = 0; i < winLen; i++) {
+                const srcIdx = lsfMaxIdx - halfWin + i;
+                const rawLsf = (srcIdx >= 0 && srcIdx < lsfLen) ? lsf[srcIdx] : 0;
+                // 汉宁窗 (Hanning Window) 加权
+                const w = 0.5 * (1 - Math.cos((2 * Math.PI * i) / (winLen - 1)));
+                windowedLsf[i] = rawLsf * w;
+            }
+
+            // 6. 离散傅里叶变换 (DFT) 计算 MTF
+            const numFreqs = 64;
+            const mtf = [];
+            let dcValue = 0;
+
+            for (let f = 0; f < numFreqs; f++) {
+                let re = 0, im = 0;
+                const omega = (2 * Math.PI * f) / winLen;
+                for (let n = 0; n < winLen; n++) {
+                    re += windowedLsf[n] * Math.cos(omega * n);
+                    im -= windowedLsf[n] * Math.sin(omega * n);
+                }
+                const mag = Math.sqrt(re * re + im * im);
+                if (f === 0) dcValue = mag;
+                mtf.push(dcValue > 0 ? mag / dcValue : 0);
+            }
+
+            // 7. 计算 MTF50 (线性插值寻找 MTF=0.5 处的频率)
+            let mtf50Val = 0;
+            for (let f = 0; f < numFreqs - 1; f++) {
+                if (mtf[f] >= 0.5 && mtf[f + 1] <= 0.5) {
+                    const ratio = (0.5 - mtf[f]) / (mtf[f + 1] - mtf[f]);
+                    const freqIdx = f + ratio;
+                    // 换算为 cycles/pixel
+                    mtf50Val = (freqIdx / winLen) * oversampling;
+                    break;
+                }
+            }
+
+            if (mtf50Val > 0) {
+                valMtf50.innerHTML = `${mtf50Val.toFixed(3)}<span class="unit">c/p</span>`;
+            } else {
+                valMtf50.innerHTML = `> 0.5<span class="unit">c/p</span>`;
+            }
+
+            // 绘制图表
+            drawMtfChart(mtf, mtf50Val, winLen, oversampling);
+            drawEsfLsfChart(esf, windowedLsf);
+        }
+
+        // 绘制 MTF 曲线
+        function drawMtfChart(mtf, mtf50, winLen, oversampling) {
+            const w = chartMtf.width;
+            const h = chartMtf.height;
+            mtfCtx.clearRect(0, 0, w, h);
+
+            const padL = 36, padR = 16, padT = 24, padB = 24;
+            const plotW = w - padL - padR;
+            const plotH = h - padT - padB;
+
+            // 绘制网格与坐标轴
+            mtfCtx.strokeStyle = '#334155';
+            mtfCtx.lineWidth = 1;
+            mtfCtx.font = '10px monospace';
+            mtfCtx.fillStyle = '#94a3b8';
+
+            for (let v = 0; v <= 1; v += 0.5) {
+                const y = padT + plotH * (1 - v);
+                mtfCtx.beginPath();
+                mtfCtx.moveTo(padL, y);
+                mtfCtx.lineTo(w - padR, y);
+                mtfCtx.stroke();
+                mtfCtx.fillText(v.toFixed(1), 6, y + 3);
+            }
+
+            // 0.5 基准线 (红色虚线)
+            const y50 = padT + plotH * 0.5;
+            mtfCtx.strokeStyle = 'rgba(248, 113, 113, 0.4)';
+            mtfCtx.setLineDash([4, 4]);
+            mtfCtx.beginPath();
+            mtfCtx.moveTo(padL, y50);
+            mtfCtx.lineTo(w - padR, y50);
+            mtfCtx.stroke();
+            mtfCtx.setLineDash([]);
+
+            // 绘制 MTF 曲线
+            mtfCtx.strokeStyle = '#38bdf8';
+            mtfCtx.lineWidth = 2;
+            mtfCtx.beginPath();
+
+            const maxCyclesPerPixel = 0.5; // Nyquist 极限为 0.5 c/p
+            for (let i = 0; i < mtf.length; i++) {
+                const freq = (i / winLen) * oversampling;
+                if (freq > maxCyclesPerPixel) break;
+
+                const x = padL + (freq / maxCyclesPerPixel) * plotW;
+                const y = padT + (1 - Math.min(1, mtf[i])) * plotH;
+                if (i === 0) mtfCtx.moveTo(x, y);
+                else mtfCtx.lineTo(x, y);
+            }
+            mtfCtx.stroke();
+
+            // 标注 X 轴频率刻度
+            for (let f = 0; f <= maxCyclesPerPixel; f += 0.1) {
+                const x = padL + (f / maxCyclesPerPixel) * plotW;
+                mtfCtx.fillText(f.toFixed(1), x - 8, h - 8);
+            }
+        }
+
+        // 绘制 ESF 与 LSF 曲线
+        function drawEsfLsfChart(esf, lsf) {
+            const w = chartEsfLsf.width;
+            const h = chartEsfLsf.height;
+            esfLsfCtx.clearRect(0, 0, w, h);
+
+            const padL = 20, padR = 20, padT = 24, padB = 16;
+            const plotW = w - padL - padR;
+            const plotH = h - padT - padB;
+
+            // 绘制 ESF (蓝色)
+            esfLsfCtx.strokeStyle = 'rgba(56, 189, 248, 0.6)';
+            esfLsfCtx.lineWidth = 1.5;
+            esfLsfCtx.beginPath();
+            const esfMin = Math.min(...esf);
+            const esfMax = Math.max(...esf);
+            const esfRange = (esfMax - esfMin) || 1;
+
+            for (let i = 0; i < esf.length; i++) {
+                const x = padL + (i / (esf.length - 1)) * plotW;
+                const y = padT + (1 - (esf[i] - esfMin) / esfRange) * plotH;
+                if (i === 0) esfLsfCtx.moveTo(x, y);
+                else esfLsfCtx.lineTo(x, y);
+            }
+            esfLsfCtx.stroke();
+
+            // 绘制 LSF (绿色)
+            esfLsfCtx.strokeStyle = '#4ade80';
+            esfLsfCtx.lineWidth = 2;
+            esfLsfCtx.beginPath();
+            const lsfMax = Math.max(...lsf) || 1;
+
+            for (let i = 0; i < lsf.length; i++) {
+                const x = padL + (i / (lsf.length - 1)) * plotW;
+                const y = padT + (1 - lsf[i] / lsfMax) * plotH;
+                if (i === 0) esfLsfCtx.moveTo(x, y);
+                else esfLsfCtx.lineTo(x, y);
+            }
+            esfLsfCtx.stroke();
+        }
+
+        // 初始化加载模拟数据
+        generateSyntheticSlantedEdge();
+    </script>
+</body>
+
+</html>
