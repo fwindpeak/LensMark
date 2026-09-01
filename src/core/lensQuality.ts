@@ -446,19 +446,19 @@ export function analyzeLensQuality(
           maxResolutionCap
         );
         score = Math.round(
-          rawScore * 0.6 +
-            Math.min(maxResolutionCap, ratioToCenter * 80) * 0.4
+          rawScore * 0.7 +
+            Math.min(maxResolutionCap, ratioToCenter * rawScore) * 0.3
         );
       } else {
-        // 无纹理/散景区：根据中心光学基准进行软性推算，防止被天空/虚化误判
-        const softCenter = calculateAcutanceScore(
-          centerSalientMean * 0.75,
+        // 无有效高频纹理/散景区：根据实际实测背景微弱梯度计算，如平坦纯色区适度回落
+        const rawScore = calculateAcutanceScore(
+          salientAvg,
           isOversharpened,
           nativeH,
           nativeMegapixels,
           maxResolutionCap
         );
-        score = Math.round(Math.max(30, softCenter * 0.85));
+        score = Math.round(Math.max(15, Math.min(55, rawScore)));
       }
     }
     score = Math.max(10, Math.min(maxResolutionCap, score));
@@ -540,44 +540,40 @@ export function analyzeLensQuality(
   }
 
   // 14. 综合光学评分体系 (0~100)
-  // 门控一致性评分：杜绝“中心和四角都烂得很均匀，结果一致性拿满 100 分”的漏洞
-  const rawFalloffScore = Math.max(0, 100 - edgeFalloffPct * 1.25);
-  const centerQualityGate = Math.max(0.2, centerSharpness / 100);
-  const falloffScore = Math.round(rawFalloffScore * centerQualityGate + (1 - centerQualityGate) * centerSharpness);
-
-  // 物理像素规模与解析力承载分 (0~100)
-  let resolutionScore = 50;
-  if (nativeMegapixels >= 24) {
-    resolutionScore = 98; // 2400万像素及以上专业全画幅/高像素
-  } else if (nativeMegapixels >= 12) {
-    resolutionScore = 88; // 1200~2400万像素主流
-  } else if (nativeMegapixels >= 6) {
-    resolutionScore = 75;
-  } else if (nativeMegapixels >= 2.5) {
-    resolutionScore = 60;
-  } else if (nativeMegapixels >= 1.0) {
-    resolutionScore = 40;
-  } else {
-    resolutionScore = 20; // < 100万像素老手机
-  }
-
+  // 基础加权合成：中心解析力 40% + 边角及一致性 30% + 色散抑制 15% + 暗角与照度 15%
   const caScore =
-    caResult.averageCaPx < 0.6
+    caResult.averageCaPx < 0.4
       ? 95
-      : caResult.averageCaPx < 1.2
-      ? 82
-      : caResult.averageCaPx < 2.0
-      ? 65
-      : 40;
-  const vigScore = Math.min(100, Math.max(40, vigResult.relativeIlluminationPct));
+      : caResult.averageCaPx < 0.8
+      ? 85
+      : caResult.averageCaPx < 1.4
+      ? 70
+      : caResult.averageCaPx < 2.2
+      ? 50
+      : 30;
 
-  // 基础加权合成：中心 35% + 像场一致性 25% + 物理分辨率承载 20% + 色散 10% + 暗角 10%
+  const vigScore =
+    vigResult.relativeIlluminationPct >= 85
+      ? 95
+      : vigResult.relativeIlluminationPct >= 72
+      ? 85
+      : vigResult.relativeIlluminationPct >= 58
+      ? 70
+      : vigResult.relativeIlluminationPct >= 42
+      ? 52
+      : 35;
+
+  // 严谨的像场一致性评分：边角锐度根据中心衰减率加权
+  const consistencyScore = Math.max(
+    10,
+    Math.round(cornerAvgSharpness * (1.0 - Math.min(0.5, (edgeFalloffPct / 100) * 0.7)))
+  );
+
   let rawOverallScore =
-    centerSharpness * 0.35 +
-    falloffScore * 0.25 +
-    resolutionScore * 0.20 +
-    caScore * 0.10 +
-    vigScore * 0.10;
+    centerSharpness * 0.40 +
+    consistencyScore * 0.30 +
+    caScore * 0.15 +
+    vigScore * 0.15;
 
   // 15. 画质劣化惩罚：高噪声、JPEG 重度马赛克与过度计算锐化
   let totalPenalty = 0;
@@ -611,18 +607,19 @@ export function analyzeLensQuality(
 
   let gradeLevel: LensQualityResult['gradeLevel'] = 'B';
   let gradeTitle = '良好 (主流均衡)';
-  if (finalScore >= 90) {
+  // S 级 (旗舰级光学标杆)：必须同时满足总分 >= 88、中心极高解析 (>= 86)、边角衰减控制在 20% 以内且色散极小
+  if (finalScore >= 88 && centerSharpness >= 86 && edgeFalloffPct <= 20 && caResult.averageCaPx <= 0.6) {
     gradeLevel = 'S';
     gradeTitle = '卓越 (旗舰级光学素质)';
-  } else if (finalScore >= 80) {
+  } else if (finalScore >= 78 && centerSharpness >= 75) {
     gradeLevel = 'A';
     gradeTitle = '优秀 (高分辨率锐利)';
-  } else if (finalScore >= 70) {
+  } else if (finalScore >= 62) {
     gradeLevel = 'B';
     gradeTitle = '良好 (主流均衡)';
-  } else if (finalScore >= 55) {
+  } else if (finalScore >= 45) {
     gradeLevel = 'C';
-    gradeTitle = '普通 (边缘软化/存在噪点或色散)';
+    gradeTitle = '普通 (边缘软化/存在色散)';
   } else {
     gradeLevel = 'D';
     gradeTitle = '偏低 (低解析力/高噪点/低像素限制)';
@@ -683,22 +680,29 @@ function calculateAcutanceScore(
   megapixels: number,
   maxCap: number
 ): number {
-  // 基于对数压缩的光学相干响应曲线
-  let baseScore = 15 + Math.log1p(coherentEnergy * 1.8) * 28;
+  const energy = Math.max(0, coherentEnergy);
 
-  // 结合物理像素高度与信息量校准
-  if (nativeHeight >= 3000 && megapixels >= 18) {
-    baseScore += 6;
-  } else if (nativeHeight >= 2000 && megapixels >= 8) {
-    baseScore += 2;
-  } else if (nativeHeight <= 1000 || megapixels < 2.0) {
-    baseScore -= 12;
-  } else if (nativeHeight <= 600 || megapixels < 0.8) {
-    baseScore -= 24;
+  // 严格的非线性光学相干传递函数 (基于 S 形响应曲线)
+  // 0~2.0 (虚化/严重偏软): < 30 分
+  // 2.0~4.5 (低对比/套头边缘): 35~55 分
+  // 4.5~8.5 (主流中端/标准套头中心): 55~70 分
+  // 8.5~15.0 (专业大光圈/高锐度定焦): 70~82 分
+  // 15.0~26.0 (顶级旗舰/标杆光学解析): 82~92 分
+  // 26.0+ (标板/极高反差): 92~98 分
+  let baseScore = (Math.pow(energy, 1.15) / (Math.pow(energy, 1.15) + 6.5)) * 100;
+
+  // 物理传感器像素采样约束 (限制低像素上限，但不对高像素无脑加分)
+  if (megapixels < 2.0 || nativeHeight < 900) {
+    baseScore *= 0.70;
+  } else if (megapixels < 6.0 || nativeHeight < 1500) {
+    baseScore *= 0.85;
+  } else if (megapixels < 12.0) {
+    baseScore *= 0.94;
   }
 
+  // 计算摄影白边锐化去偏惩罚
   if (isOversharpened) {
-    baseScore -= 6;
+    baseScore *= 0.90;
   }
 
   return Math.round(Math.min(maxCap, Math.max(10, baseScore)));
