@@ -94,10 +94,9 @@ export function ComparisonPanel({
       <div className="section-heading">
         <div>
           <div className="eyebrow">对比与记录</div>
-          <h2>让差异看得见</h2>
+          <h2>多图数据对比与评估历史</h2>
           <p>
-            上传后自动保存报告与小预览，不保存原照片。最多 50
-            份，仅保存在当前浏览器。
+            每次分析自动在本地保存报告概览与微型缩略图（不保存原始照片文件）。最多保存 50 份记录，全保存在本地浏览器中。
           </p>
         </div>
         <div className="button-row">
@@ -220,7 +219,7 @@ export function ComparisonPanel({
                   checked={confirmed}
                   onChange={(e) => setConfirmed(e.target.checked)}
                 />
-                已确认同一目标、比例、光照和后期，且检查了对焦与抖动。
+                已确认拍摄条件（同一目标、比例、光照和后期，且已检查对焦与防抖）。
               </label>
             </div>
           )}

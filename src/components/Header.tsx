@@ -1,5 +1,5 @@
 import { useRef } from 'react';
-import { Aperture, Upload, HelpCircle } from 'lucide-react';
+import { Aperture, Upload, HelpCircle, Sun, Moon } from 'lucide-react';
 import type { AnalysisMode } from '../types/mtf';
 import { DEMOS } from '../core/demoImages';
 import type { DemoKind } from '../core/demoImages';
@@ -11,6 +11,8 @@ export function Header({
   onDemo,
   onGuide,
   count,
+  theme,
+  onToggleTheme,
 }: {
   mode: AnalysisMode;
   onModeChange: (mode: AnalysisMode) => void;
@@ -18,17 +20,30 @@ export function Header({
   onDemo: (kind: DemoKind) => void;
   onGuide: () => void;
   count: number;
+  theme?: 'dark' | 'light';
+  onToggleTheme?: () => void;
 }) {
   const input = useRef<HTMLInputElement>(null);
   return (
     <header className="app-header">
       <a className="brand" href="#top" aria-label="LensMark 首页">
-        <Aperture size={30} />
+        <Aperture size={28} />
         <span>
-          LensMark<small>照片与镜头评估</small>
+          LensMark<small>光学性能与照片质量评估</small>
         </span>
       </a>
       <div className="header-actions">
+        {onToggleTheme && (
+          <button
+            className="quiet"
+            onClick={onToggleTheme}
+            title={theme === 'light' ? '切换至深色模式' : '切换至浅色模式'}
+            aria-label={theme === 'light' ? '切换至深色模式' : '切换至浅色模式'}
+          >
+            {theme === 'light' ? <Moon size={16} /> : <Sun size={16} />}
+            <span>{theme === 'light' ? '深色' : '亮色'}</span>
+          </button>
+        )}
         <button className="quiet" onClick={onGuide}>
           <HelpCircle size={16} />
           拍摄指南
@@ -87,3 +102,4 @@ export function Header({
     </header>
   );
 }
+

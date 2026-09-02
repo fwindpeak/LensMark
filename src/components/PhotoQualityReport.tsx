@@ -16,13 +16,13 @@ export function PhotoSummary({
       </div>
       <div>
         <div className="eyebrow">
-          {subjectOnly ? '已选主体 · 局部清晰度' : '自动照片评价'}
+          {subjectOnly ? '已选主体 · 局部解像力' : '自动照片质感评估'}
         </div>
         <h2>{assessment.title}</h2>
         <p>{assessment.summary}</p>
         <small>
-          已测评分权重 {Math.round(assessment.coverage * 100)}% ·
-          启发式参考，不是审美分数或镜头排名
+          已测指标权重覆盖率 {Math.round(assessment.coverage * 100)}% ·
+          基于客观像素数据（非艺术审美评分）
         </small>
       </div>
     </section>
@@ -51,11 +51,11 @@ export function PhotoQualityReport({ result }: { result: AnalysisResult }) {
               />
             )}
             <details>
-              <summary>怎么看 / 怎么改善</summary>
+              <summary>维度分析与优化建议</summary>
               <p>{m.advice}</p>
               {m.value !== null && (
                 <small>
-                  {m.value.toFixed(2)} {m.unit}
+                  实测数据: {m.value.toFixed(2)} {m.unit}
                 </small>
               )}
             </details>
@@ -63,7 +63,7 @@ export function PhotoQualityReport({ result }: { result: AnalysisResult }) {
         ))}
       </section>
       <section className="report-card tips">
-        <h3>建议先做什么</h3>
+        <h3>拍摄与画质建议</h3>
         {assessment.suggestions.length ? (
           <ol>
             {assessment.suggestions.map((s) => (
@@ -72,7 +72,7 @@ export function PhotoQualityReport({ result }: { result: AnalysisResult }) {
           </ol>
         ) : (
           <p>
-            先放大确认关键主体。若要比较镜头，切到“镜头评价”，查看各位置解析力与色差。
+            建议放大检查核心主体焦平面。若需对比不同镜头/光圈的表现，请切换至“镜头评价”面板。
           </p>
         )}
       </section>
@@ -96,25 +96,23 @@ export function PhotoQualityReport({ result }: { result: AnalysisResult }) {
           ))}
         </svg>
         <div className="range-labels">
-          <span>暗部</span>
-          <span>中间调</span>
-          <span>高光</span>
+          <span>暗部 (Shadows)</span>
+          <span>中间调 (Midtones)</span>
+          <span>高光 (Highlights)</span>
         </div>
         <p>
-          清晰度 45% + 曝光保留 30% + 纯净度
-          25%；缺失项不当作满分，按已测权重归一。缺少清晰度时只给分项结论，不给总分。
+          综合参考分权项：解像清晰度 45% + 曝光保留动态范围 30% + 画面纯净度 (SNR)
+          25%；未测项目按已测有效权重自动归一化计算。
         </p>
         <p>
-          清晰度使用较清晰的一半有效区域，减少背景虚化干扰；自动采样不是主体识别。可在图片上点选主体复查。
-        </p>
-        <p>
-          明暗层次只作描述，不因黑白、低饱和或创作风格扣分。手机照片得到较好技术参考分，也不表示它使用了优秀镜头。
+          清晰度采样优先选择图像中解像最高的前 50% 有效区域，最大程度降低背景景深虚化对整体判定的干扰。可以在工作台上点击关键主体进行单独精准复查。
         </p>
         <p className="muted">
-          {photo.noise.note} 曝光概览 {photo.overviewDimensions.width}×
-          {photo.overviewDimensions.height}；细节与噪声均取原像素。
+          {photo.noise.note} 预览采样分辨率 {photo.overviewDimensions.width}×
+          {photo.overviewDimensions.height}；解像细节与噪声指标均从原像素精准提取。
         </p>
       </details>
     </>
   );
 }
+

@@ -9,36 +9,36 @@ export const SCENES: { id: TestScene; label: string; tip: string }[] = [
   {
     id: 'general',
     label: '普通实拍',
-    tip: '自动寻找可测轮廓，观察当前照片的镜头成像表现。无需先框选。',
+    tip: '自动定位画面可测轮廓，评估当前日常实拍的解像表现（无需预先框选）。',
   },
   {
     id: 'resolution',
     label: '解析力 / 色差',
-    tip: '拍摄平整的中性斜边靶，同一平面覆盖中心与边角；相机正对靶面。',
+    tip: '拍摄平整的斜边测试靶（相机正对靶面），覆盖画面中心与九区边缘，定量计算 MTF50 与色散。',
   },
   {
     id: 'flat',
     label: '暗角',
-    tip: '用均匀照明的白墙或漫射板填满画面，稍微失焦，不要过曝。不要用普通风景判断暗角。',
+    tip: '拍摄均匀照明的平场白墙或漫射板（适当失焦、切勿过曝），计算边角相对照度衰减。',
   },
   {
     id: 'grid',
     label: '畸变',
-    tip: '拍满横竖网格，至少覆盖画面外侧；相机尽量正对，线条须真实笔直。',
+    tip: '拍满横竖规则网格阵列，覆盖画面外侧边缘，定量拟合几何畸变系数。',
   },
 ];
 const value = (v: number | null, digits = 3) =>
   v === null ? '待补样张' : v.toFixed(digits);
 export const mtfLabel = (v: number | null) =>
   v === null
-    ? '未找到可测边缘'
+    ? '未找到有效边缘'
     : v >= 0.25
-      ? '局部解析较强'
+      ? '局部解像力极高'
       : v >= 0.16
-        ? '局部解析良好'
+        ? '局部解像力良好'
         : v >= 0.1
-          ? '局部偏柔'
-          : '建议复查合焦';
+          ? '局部对比度偏柔'
+          : '建议复查焦点';
 function ZoneGrid({
   zones,
   onSelect,
@@ -91,7 +91,7 @@ export function LensPerformanceReport({
   return (
     <>
       <section className="report-card scene-picker">
-        <h3>你要测什么？</h3>
+        <h3>测试项目</h3>
         <div className="segmented">
           {SCENES.map((s) => (
             <button
@@ -110,16 +110,16 @@ export function LensPerformanceReport({
           <section className="report-card">
             <div className="section-heading">
               <h3>解析力分布</h3>
-              <span className="tag">{count} / 9 区已测</span>
+              <span className="tag">{count} / 9 区域已测</span>
             </div>
             <div className="metric-grid">
               <div>
-                <span>中心 MTF50</span>
+                <span>中心 MTF50 (cycles/px)</span>
                 <strong>{value(lens.centerMtf50)}</strong>
                 <small>{mtfLabel(lens.centerMtf50)}</small>
               </div>
               <div>
-                <span>同方向已测四角中位数</span>
+                <span>同方向边缘中位数 (MTF50)</span>
                 <strong>{value(lens.edgeMtf50)}</strong>
                 <small>
                   {mtfLabel(lens.edgeMtf50)}
@@ -132,52 +132,47 @@ export function LensPerformanceReport({
             </div>
             <ZoneGrid zones={lens.zones} onSelect={onSelect} />
             <p className="muted">
-              单位
-              cycles/pixel，越高表示该处对细节的传递越强。点击区域看曲线。未取样区不推算；横竖方向不混合平均。
+              数值单位 cycles/pixel（空间频率），数值越高表示对细节的传递能力越强。点击对应区域可查看高阶 ESF/LSF 响应曲线。
             </p>
             {!count && (
               <div className="inline-help">
                 <p>
-                  这张照片没有合适的直斜边，不影响照片评价。用下方练习靶可完成镜头解析力测试。
+                  当前照片未自动匹配到合格的直斜边轮廓（不影响照片基础画质评价）。如需精准测算镜头 MTF 曲线，可使用练习标靶测试。
                 </p>
                 <button onClick={() => onDemo('detail')}>体验解析力测量</button>
               </div>
             )}
             <details>
-              <summary>如何据此评价镜头</summary>
+              <summary>镜头光学评价参考说明</summary>
               <p>
-                同机身、同焦距、同曝光和后期下，比较相同位置和方向的数值；用对比页看差值与重复测量波动。中心强而四角弱可能来自镜头、景深或靶面倾斜，要重复合焦排除干扰。
-              </p>
-              <p>
-                “较强/偏柔”是原像素经验提示，不是跨机身标准评级。自然照片各处纹理、距离不同，不用九区差异直接判镜头偏心。
+                在相同机身、焦距、光圈与无损后期条件下，对比相同位置与方向的 MTF 空间频率。中心高而边缘低常见于镜头相差衰减、景深不足或靶面未正对，建议多次对焦测试。
               </p>
             </details>
           </section>
           <section className="report-card">
-            <h3>横向色差 / RGB 边缘错位</h3>
+            <h3>横向色散 / RGB 边缘错位</h3>
             <div className="single-value">
               {value(lens.caPx, 2)}
               {lens.caPx !== null && <small> px</small>}
             </div>
             <p>
               {lens.caPx === null
-                ? '外侧尚未找到满足条件的中性边缘。换用黑灰斜边靶可测；有颜色的物体不当作色差。'
+                ? '边缘区域未找到合格的中性轮廓。使用中性斜边靶可精准测算；有彩色物体不会计入色散。'
                 : lens.caPx < 0.5
-                  ? '测得通道错位较轻，当前成片彩边控制较好。'
+                  ? '测得 RGB 通道重心错位极小，边角高反差轮廓紫边/绿边控制优异。'
                   : lens.caPx < 1.2
-                    ? '存在可见的通道错位，可在高反差边缘放大检查。'
-                    : '通道错位较明显，建议核对镜头校正前后的变化。'}
+                    ? '存在轻微通道错位，高反差边缘放大观察可能可见细微色边。'
+                    : 'RGB 通道错位明显，建议开启镜头光学校正文件进行补偿。'}
             </p>
             <details>
-              <summary>测量口径</summary>
+              <summary>测量原理与标准</summary>
               <p>
-                仅统计外侧、近切向的中性边缘，计算 R/G、B/G
-                归一化边缘重心的最大差，再取中位数。单位是边缘法向原像素，非纵向色差。机内校正与去马赛克可能改变结果。
+                统计画面外侧中性边缘在切向方向上 R/G 与 B/G 的归一化边缘重心最大偏移值（单位：像素）。该项指标针对横向色散 (Lateral CA)，不受纵向轴向色散影响。
               </p>
             </details>
           </section>
           <section className="report-card supplementary">
-            <h3>补齐镜头表现</h3>
+            <h3>补齐其他光学指标</h3>
             <button onClick={() => onScene('flat')}>
               测暗角 <span>平场照片 →</span>
             </button>
@@ -189,7 +184,7 @@ export function LensPerformanceReport({
       )}
       {scene === 'flat' && (
         <section className="report-card">
-          <h3>暗角与亮度均匀性</h3>
+          <h3>暗角与相对照度</h3>
           <div className="single-value">
             {value(lens.flat?.falloffEv ?? null, 2)}
             {lens.flat?.valid && <small> EV</small>}
@@ -197,11 +192,11 @@ export function LensPerformanceReport({
           <p>
             {lens.flat?.valid
               ? lens.flat.falloffEv! < 0.4
-                ? '角落衰减较轻，当前成片亮度比较均匀。'
+                ? '边角照度衰减极轻，画面整体亮度分布非常均匀。'
                 : lens.flat.falloffEv! < 1
-                  ? '有一定暗角，可按风格保留或校正。'
-                  : '暗角较明显，可尝试收小光圈或启用暗角校正。'
-              : '还没有可用的平场测量。'}
+                  ? '存在适度暗角衰减，在平场下可见轻微边角变暗。'
+                  : '边角光致衰减较明显，可适当收小光圈或开启暗角补偿。'
+              : '尚未测得有效的平场图像。'}
           </p>
           <p>{lens.flat?.message}</p>
           {lens.flat?.valid && (
@@ -222,9 +217,9 @@ export function LensPerformanceReport({
                 ))}
               </div>
               <small>
-                每格为相对中心的 EV 衰减；四角差{' '}
+                7×7 网格为相对中心画面的照度衰减 (EV)；四角最大不对称度{' '}
                 {lens.flat.asymmetryEv?.toFixed(2)}{' '}
-                EV。采样位置在角落区域内，不是最边缘像素。
+                EV。
               </small>
             </>
           )}
@@ -244,17 +239,15 @@ export function LensPerformanceReport({
           {lens.distortion?.valid && (
             <>
               <p>
-                已拟合 {lens.distortion.lines.length} 条网格线。
+                已精准拟合 {lens.distortion.lines.length} 条网格直线。
                 {Math.abs(lens.distortion.cornerDistortionPct!) < 1
-                  ? '当前成片的直线保持较好。'
-                  : '可尝试镜头配置文件校正；比较时要统一校正状态。'}
+                  ? '画面几何直线保持良好，未见明显形变。'
+                  : '存在可见几何形变，建议配合镜头校正文件恢复直线性。'}
               </p>
               <details>
-                <summary>数值含义</summary>
+                <summary>畸变模型计算说明</summary>
                 <p>
-                  负值为桶形，正值为枕形。这里是以半对角线归一化的单参数 k₁
-                  模型角点畸变估计，不是 TV
-                  畸变。无法拟合复杂波浪畸变或恢复完整相机标定。
+                  负值为桶形畸变 (Barrel)，正值为枕形畸变 (Pincushion)。采用归一化半对角线单参数 k₁ 径向模型拟合角点畸变率。
                 </p>
               </details>
             </>
@@ -265,10 +258,9 @@ export function LensPerformanceReport({
         </section>
       )}
       <section className="report-card target-download">
-        <h3>准备测试样张</h3>
+        <h3>测试标靶下载</h3>
         <p>
-          同一机身，每支镜头或每档光圈拍 3–5
-          张；保持距离、光照、构图与后期一致，再批量上传。
+          测试镜头时建议使用固定机身与三脚架，保持照明光线稳定，每挡光圈重复拍摄 3–5 张以检验稳定性。
         </p>
         <button
           onClick={() =>
@@ -293,9 +285,10 @@ export function LensPerformanceReport({
           下载网格靶
         </button>
         <small>
-          打印靶自身的清晰度也会限制测量；这些是练习靶，不是认证标板。
+          标靶印刷清晰度与平整度也会影响最终测算结果；此矢量图为标准练习标靶。
         </small>
       </section>
     </>
   );
 }
+

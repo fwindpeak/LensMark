@@ -141,7 +141,8 @@ export function ImageWorkspace({
     >
       <div className="workspace-toolbar">
         <span>
-          {image.naturalWidth} × {image.naturalHeight} px
+          <b>{image.naturalWidth} × {image.naturalHeight}</b> px ·{' '}
+          {subjectOnly ? '已选主体' : '全图自动采样'}
         </span>
         <div className="button-row">
           <button
@@ -156,11 +157,6 @@ export function ImageWorkspace({
           >
             {showCrop ? '收起' : '查看'} 100% 原像素
           </button>
-        </div>
-      </div>
-      <div className="workspace-toolbar">
-        <span>{subjectOnly ? '正在评价选中主体' : '已自动采样，无需框选'}</span>
-        <div className="button-row">
           <button onClick={onAuto}>自动分析全图</button>
           <button
             onClick={() => setSelecting((v) => !v)}
@@ -172,12 +168,12 @@ export function ImageWorkspace({
       </div>
       <p className="workspace-hint">
         {selecting
-          ? '拖动选择主体或一条斜边。'
-          : '点击照片中的关键主体，可单独检查其清晰度。'}
+          ? '拖动鼠标框选关键主体或一条斜边。'
+          : '在照片上点击任意关键主体，可单独检验局部解像力。'}
       </p>
       {exposureOverlay && (
         <p className="workspace-hint">
-          红色：通道接近上限 · 蓝色：接近纯黑（预览采样）
+          红色：通道接近上限（高光过曝风险） · 蓝色：暗部极低像素（阴影欠曝风险）
         </p>
       )}
       <div

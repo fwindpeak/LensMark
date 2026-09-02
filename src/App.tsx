@@ -88,6 +88,13 @@ async function readImage(
   }
 }
 export function App() {
+  const [theme, setTheme] = useState<'dark' | 'light'>(() => {
+    try {
+      const saved = localStorage.getItem('lensmark.theme');
+      if (saved === 'light' || saved === 'dark') return saved;
+    } catch {}
+    return 'dark';
+  });
   const [current, setCurrent] = useState<LoadedPhoto | null>(null);
   const currentRef = useRef<LoadedPhoto | null>(null);
   const [mode, setMode] = useState<AnalysisMode>('photo_quality'),
@@ -107,6 +114,13 @@ export function App() {
     version = useRef(0);
   const abort = useRef<AbortController | null>(null),
     uploading = useRef(false);
+
+  useEffect(() => {
+    try {
+      document.documentElement.setAttribute('data-theme', theme);
+      localStorage.setItem('lensmark.theme', theme);
+    } catch {}
+  }, [theme]);
   useEffect(
     () => () => {
       version.current++;
@@ -411,6 +425,8 @@ export function App() {
         onDemo={demo}
         onGuide={() => setGuide(true)}
         count={records.length}
+        theme={theme}
+        onToggleTheme={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
       />
       {(busy || status) && (
         <div className="status-bar" role="status" aria-live="polite">
@@ -480,8 +496,7 @@ export function App() {
           )}
           {current.source === 'raw_preview' && (
             <div className="source-banner">
-              正在分析 RAW
-              内嵌预览，可检查这张预览的画质；它不用于原像素镜头排名。
+              正在分析 RAW 内嵌预览图（用于评估预览画质，不代表原 RAW 原像素评级）。
             </div>
           )}
           {result && mode === 'photo_quality' && (
@@ -493,16 +508,16 @@ export function App() {
           {result && mode !== 'photo_quality' && (
             <section className="lens-heading">
               <div>
-                <div className="eyebrow">镜头成像表现</div>
+                <div className="eyebrow">镜头光学性能评测</div>
                 <h2>
                   {scene === 'flat'
-                    ? '暗角与亮度均匀性'
+                    ? '暗角与相对照度衰减'
                     : scene === 'grid'
-                      ? '直线保持与几何畸变'
-                      : '解析力、色差，一眼看清'}
+                      ? '几何线条与径向畸变率'
+                      : '解像力 (MTF50) 与横向色散'}
                 </h2>
                 <p>
-                  先看实测表现，再用同机身、同条件样张比较镜头。结论描述成片，包含对焦和图像处理的影响。
+                  结合图像数据评估画质与光学特征。评估结果包含相机 Sensor、焦点精准度与算法处理的综合表现。
                 </p>
               </div>
             </section>
