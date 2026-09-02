@@ -1,7 +1,12 @@
 import LibRaw, { type LibRawSettings } from 'libraw-wasm';
 import exifr from 'exifr';
 import { ParsedExifResult, ExifOverview } from '../types/exif';
-import { parsePhotoExif, formatExposureTime, estimateSensorFormat } from './exifReader';
+import {
+  parsePhotoExif,
+  formatExposureTime,
+  estimateSensorFormat,
+} from './exifReader';
+import { abortable } from './cancellation';
 
 /**
  * 常见相机厂商 RAW 照片文件扩展名列表
@@ -54,10 +59,20 @@ function rawPixelsToImage(
   data: Uint8Array | Uint16Array,
   width: number,
   height: number,
-  bits = 8
+  bits = 8,
 ): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     try {
+      if (
+        !Number.isInteger(width) ||
+        !Number.isInteger(height) ||
+        width < 1 ||
+        height < 1 ||
+        width * height > 100_000_000 ||
+        data.length !== width * height * 3
+      ) {
+        throw new Error('RAW 解码尺寸或像素长度无效');
+      }
       const canvas = document.createElement('canvas');
       canvas.width = width;
       canvas.height = height;
@@ -108,18 +123,25 @@ function rawPixelsToImage(
  */
 async function fallbackExtractRawPreview(
   file: File,
-  parsedExif: ParsedExifResult | null
+  parsedExif: ParsedExifResult | null,
+  signal?: AbortSignal,
 ): Promise<RawDecodeResult> {
   // 1. 尝试使用 exifr 提取内嵌的 thumbnail / preview
   try {
-    const thumbBuffer = await exifr.thumbnail(file);
+    const thumbBuffer = await abortable(exifr.thumbnail(file), signal);
     if (thumbBuffer && thumbBuffer.byteLength > 0) {
       const blob = new Blob([thumbBuffer], { type: 'image/jpeg' });
       const blobUrl = URL.createObjectURL(blob);
       const img = await new Promise<HTMLImageElement>((resolve, reject) => {
         const image = new Image();
-        image.onload = () => { URL.revokeObjectURL(blobUrl); resolve(image); };
-        image.onerror = (e) => { URL.revokeObjectURL(blobUrl); reject(e); };
+        image.onload = () => {
+          URL.revokeObjectURL(blobUrl);
+          resolve(image);
+        };
+        image.onerror = (e) => {
+          URL.revokeObjectURL(blobUrl);
+          reject(e);
+        };
         image.src = blobUrl;
       });
 
@@ -133,11 +155,12 @@ async function fallbackExtractRawPreview(
       };
     }
   } catch (err) {
+    if (signal?.aborted) throw err;
     console.warn('Failed to extract exifr thumbnail:', err);
   }
 
   // 2. 搜索并提取 RAW 二进制流中的主 JPEG 流 (SOI: 0xFF, 0xD8 ... EOI: 0xFF, 0xD9)
-  const arrayBuffer = await file.arrayBuffer();
+  const arrayBuffer = await abortable(file.arrayBuffer(), signal);
   const bytes = new Uint8Array(arrayBuffer);
 
   let largestJpegBlob: Blob | null = null;
@@ -155,13 +178,17 @@ async function fallbackExtractRawPreview(
           const length = j + 2 - startIndex;
           if (length > 80 * 1024 && length > maxJpegSize) {
             maxJpegSize = length;
-            largestJpegBlob = new Blob([bytes.subarray(startIndex, j + 2)], { type: 'image/jpeg' });
+            largestJpegBlob = new Blob([bytes.subarray(startIndex, j + 2)], {
+              type: 'image/jpeg',
+            });
           }
           i = j + 2;
           break;
         }
         j++;
       }
+      // A truncated stream must not rescan the remaining file for every SOI marker.
+      if (j >= scanLimit - 1) break;
     }
     i++;
   }
@@ -170,8 +197,14 @@ async function fallbackExtractRawPreview(
     const blobUrl = URL.createObjectURL(largestJpegBlob);
     const img = await new Promise<HTMLImageElement>((resolve, reject) => {
       const image = new Image();
-      image.onload = () => { URL.revokeObjectURL(blobUrl); resolve(image); };
-      image.onerror = (e) => { URL.revokeObjectURL(blobUrl); reject(e); };
+      image.onload = () => {
+        URL.revokeObjectURL(blobUrl);
+        resolve(image);
+      };
+      image.onerror = (e) => {
+        URL.revokeObjectURL(blobUrl);
+        reject(e);
+      };
       image.src = blobUrl;
     });
 
@@ -195,32 +228,48 @@ async function fallbackExtractRawPreview(
 export async function decodeRawImage(
   file: File,
   onProgress?: RawDecodeProgressCallback,
-  settings?: Partial<LibRawSettings>
+  settings?: Partial<LibRawSettings>,
+  signal?: AbortSignal,
 ): Promise<RawDecodeResult> {
   onProgress?.('正在读取 RAW 文件二进制数据...', 10);
-  const arrayBuffer = await file.arrayBuffer();
+  const arrayBuffer = await abortable(file.arrayBuffer(), signal);
   const fileBytes = new Uint8Array(arrayBuffer);
 
   // 1. 同时尝试利用 exifr 提取原生 RAW EXIF 元数据
   onProgress?.('正在解析 RAW EXIF 光学元数据...', 20);
   let parsedExif: ParsedExifResult | null = null;
   try {
-    parsedExif = await parsePhotoExif(file);
+    parsedExif = await abortable(parsePhotoExif(file), signal);
   } catch (err) {
-    console.warn('Exifr parse failed for RAW file, will fallback to LibRaw metadata:', err);
+    if (signal?.aborted) throw err;
+    console.warn(
+      'Exifr parse failed for RAW file, will fallback to LibRaw metadata:',
+      err,
+    );
   }
 
   // 2. 初始化 LibRaw WebAssembly 解码器 (Worker 模式)
   onProgress?.('正在初始化 LibRaw WebAssembly 解码内核...', 35);
   let raw: LibRaw | null = null;
+  const release = () => {
+    try {
+      raw?.dispose();
+    } catch {
+      /* Already disposed. */
+    }
+  };
+  signal?.addEventListener('abort', release, { once: true });
 
   try {
     try {
       raw = new LibRaw();
     } catch (workerErr) {
-      console.warn('LibRaw Worker creation failed, falling back to embedded preview extraction:', workerErr);
+      console.warn(
+        'LibRaw Worker creation failed, falling back to embedded preview extraction:',
+        workerErr,
+      );
       onProgress?.('解码不可用，正在尝试提取内嵌 JPEG 预览...', 60);
-      return await fallbackExtractRawPreview(file, parsedExif);
+      return await fallbackExtractRawPreview(file, parsedExif, signal);
     }
 
     // 3. 打开并载入 RAW 文件
@@ -236,24 +285,33 @@ export async function decodeRawImage(
       ...settings,
     };
 
-    await raw.open(fileBytes, decodeSettings);
+    await abortable(raw.open(fileBytes, decodeSettings), signal);
 
     // 4. 提取 LibRaw 内部丰富元数据以补全 EXIF
     try {
-      const meta = (await raw.metadata(true)) as Record<string, any> | undefined;
+      const meta = (await abortable(raw.metadata(true), signal)) as
+        | Record<string, any>
+        | undefined;
       if (meta) {
         const make = String(meta.make || '');
         const model = String(meta.model || '');
         const lensObj = meta.lens as Record<string, any> | undefined;
-        const makernotes = lensObj?.makernotes as Record<string, any> | undefined;
+        const makernotes = lensObj?.makernotes as
+          | Record<string, any>
+          | undefined;
         const otherObj = meta.other as Record<string, any> | undefined;
 
         const lensModel = String(lensObj?.Lens || makernotes?.Lens || '');
-        const fNumber = (otherObj?.aperture || lensObj?.CurAp || undefined) as number | undefined;
-        const focalLength = (otherObj?.focal_len || lensObj?.CurFocal || undefined) as number | undefined;
+        const fNumber = (otherObj?.aperture || lensObj?.CurAp || undefined) as
+          | number
+          | undefined;
+        const focalLength = (otherObj?.focal_len ||
+          lensObj?.CurFocal ||
+          undefined) as number | undefined;
         const iso = otherObj?.iso_speed as number | undefined;
         const exposureTime = otherObj?.shutter as number | undefined;
-        const focalLengthIn35mm = (lensObj?.FocalLengthIn35mmFormat || undefined) as number | undefined;
+        const focalLengthIn35mm = (lensObj?.FocalLengthIn35mmFormat ||
+          undefined) as number | undefined;
 
         if (!parsedExif) {
           const overview: ExifOverview = {
@@ -266,7 +324,11 @@ export async function decodeRawImage(
             iso,
             exposureTime,
             exposureTimeString: formatExposureTime(exposureTime),
-            sensorFormatEstimate: estimateSensorFormat(focalLength, focalLengthIn35mm, model),
+            sensorFormatEstimate: estimateSensorFormat(
+              focalLength,
+              focalLengthIn35mm,
+              model,
+            ),
             software: 'LibRaw WebAssembly Decoder',
           };
 
@@ -293,23 +355,27 @@ export async function decodeRawImage(
         }
       }
     } catch (metaErr) {
+      if (signal?.aborted) throw metaErr;
       console.warn('Failed to fetch LibRaw metadata:', metaErr);
     }
 
     // 5. 提取去马赛克后的 RGB 像素
     onProgress?.('LibRaw 正在执行 Demosaic 去马赛克与色彩解算...', 70);
-    const imgData = await raw.imageData();
+    const imgData = await abortable(raw.imageData(), signal);
 
     if (!imgData || !imgData.data || imgData.data.length === 0) {
       throw new Error('LibRaw failed to return decoded image data');
     }
 
     onProgress?.('正在渲染高质量显示图层与光学像素映射...', 90);
-    const imgElement = await rawPixelsToImage(
-      imgData.data,
-      imgData.width,
-      imgData.height,
-      imgData.bits
+    const imgElement = await abortable(
+      rawPixelsToImage(
+        imgData.data,
+        imgData.width,
+        imgData.height,
+        imgData.bits,
+      ),
+      signal,
     );
 
     onProgress?.('RAW 照片解析完成！', 100);
@@ -323,10 +389,15 @@ export async function decodeRawImage(
       decoderInfo: `LibRaw WebAssembly (${imgData.width}×${imgData.height}, ${imgData.bits}-bit)`,
     };
   } catch (decodeErr) {
-    console.warn('LibRaw decoding encountered an error, falling back to embedded full preview:', decodeErr);
+    if (signal?.aborted) throw decodeErr;
+    console.warn(
+      'LibRaw decoding encountered an error, falling back to embedded full preview:',
+      decodeErr,
+    );
     onProgress?.('RAW 解码失败，正在尝试提取内嵌 JPEG 预览...', 60);
-    return await fallbackExtractRawPreview(file, parsedExif);
+    return await fallbackExtractRawPreview(file, parsedExif, signal);
   } finally {
+    signal?.removeEventListener('abort', release);
     // 释放 Worker 与 WebAssembly 内存
     if (raw) {
       try {

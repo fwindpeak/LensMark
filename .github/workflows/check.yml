@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - fix/evidence-based-photo-analysis
+      - fix/usable-photo-lens-assessment
 permissions:
   contents: read
 jobs:

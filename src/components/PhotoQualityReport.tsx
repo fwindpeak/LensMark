@@ -1,19 +1,120 @@
+import type { AnalysisResult } from '../types/evaluation';
+import type { PhotoAssessment } from '../types/assessment';
 
-import type { PhotoQualityReport as Report } from '../types/evaluation';
-export function PhotoQualityReport({ report }: { report: Report }) {
-  const { exposure: e, noise, subject, overviewDimensions: size } = report;
-  const metric = (v: number | null, digits = 2) => v === null ? '无法估计' : v.toFixed(digits);
-  return <>
-    <section className="report-card"><div className="eyebrow">照片检查</div><h2>先看这张照片发生了什么</h2><p>曝光分布、噪声残差和局部细节分别呈现。场景不同，不能直接用一个总分排名。</p></section>
-    <section className="report-card"><h3>曝光与通道截断</h3><div className="metric-grid">
-      <div><span>接近白色上限</span><strong>{metric(e.highlightsPct)}<small>%</small></strong></div>
-      <div><span>接近黑色下限</span><strong>{metric(e.shadowsPct)}<small>%</small></strong></div>
-    </div><p>R / G / B 通道上限占比：{e.channelClippingPct.map(v => metric(v) + '%').join(' / ')}</p><p className="muted">概览采样 {size.width}×{size.height}，缩放可能漏掉细小截断。分布不等于曝光对错，也不代表传感器动态范围。</p></section>
-    <section className="report-card"><h3>平坦区噪声估计 <span className="tag">原像素采样</span></h3><div className="metric-grid">
-      <div><span>亮度残差 σ · 8-bit 码值</span><strong>{metric(noise.sigma)}</strong></div>
-      <div><span>平坦区信号 / 残差</span><strong>{metric(noise.snrDb, 1)}{noise.snrDb !== null && <small>dB</small>}</strong></div>
-    </div><p>{noise.note}</p><p className="muted">有效平坦块 {noise.patches} / 候选 {noise.candidates}；仅扫描九处原像素小块，不代表全图每个区域。</p></section>
-    <section className="report-card"><h3>当前选区的细节</h3><p>{subject.note}</p><dl className="data-list"><dt>梯度 RMS</dt><dd>{metric(subject.gradientRms)}</dd><dt>Laplacian 方差</dt><dd>{metric(subject.laplacianVariance)}</dd><dt>实际采样</dt><dd>{subject.roi.w}×{subject.roi.h} px</dd></dl><p className="muted">选区超过 512 px 时，取中间 512×512 原像素，不缩图计算。未进行语义主体识别或合焦面积估计。</p></section>
-    <section className="report-card"><h3>下一步怎么拍</h3><ul>{report.recommendations.map(t => <li key={t}>{t}</li>)}</ul></section>
-  </>;
+export function PhotoSummary({
+  assessment,
+  subjectOnly,
+}: {
+  assessment: PhotoAssessment;
+  subjectOnly: boolean;
+}) {
+  return (
+    <section className={'result-summary ' + assessment.rating}>
+      <div className="score-dial">
+        <strong>{assessment.score ?? '—'}</strong>
+        <span>技术参考分</span>
+      </div>
+      <div>
+        <div className="eyebrow">
+          {subjectOnly ? '已选主体 · 局部清晰度' : '自动照片评价'}
+        </div>
+        <h2>{assessment.title}</h2>
+        <p>{assessment.summary}</p>
+        <small>
+          已测评分权重 {Math.round(assessment.coverage * 100)}% ·
+          启发式参考，不是审美分数或镜头排名
+        </small>
+      </div>
+    </section>
+  );
+}
+export function PhotoQualityReport({ result }: { result: AnalysisResult }) {
+  const { assessment, photo } = result;
+  const max = Math.max(1, ...assessment.histogram);
+  return (
+    <>
+      <section className="quality-grid" aria-label="照片评价指标">
+        {assessment.metrics.map((m) => (
+          <article className={'metric-card ' + m.rating} key={m.id}>
+            <div className="metric-title">
+              {m.name}
+              <span className={'rating-dot ' + m.rating} />
+            </div>
+            <h3>{m.label}</h3>
+            <p>{m.summary}</p>
+            {m.score !== null && (
+              <meter
+                min="0"
+                max="100"
+                value={m.score}
+                aria-label={m.name + '参考分'}
+              />
+            )}
+            <details>
+              <summary>怎么看 / 怎么改善</summary>
+              <p>{m.advice}</p>
+              {m.value !== null && (
+                <small>
+                  {m.value.toFixed(2)} {m.unit}
+                </small>
+              )}
+            </details>
+          </article>
+        ))}
+      </section>
+      <section className="report-card tips">
+        <h3>建议先做什么</h3>
+        {assessment.suggestions.length ? (
+          <ol>
+            {assessment.suggestions.map((s) => (
+              <li key={s}>{s}</li>
+            ))}
+          </ol>
+        ) : (
+          <p>
+            先放大确认关键主体。若要比较镜头，切到“镜头评价”，查看各位置解析力与色差。
+          </p>
+        )}
+      </section>
+      <details className="report-card">
+        <summary>亮度分布与评分依据</summary>
+        <svg
+          className="histogram"
+          viewBox="0 0 256 80"
+          role="img"
+          aria-label="亮度直方图，左侧暗部，右侧高光"
+        >
+          {assessment.histogram.map((v, i) => (
+            <rect
+              key={i}
+              x={i * 4}
+              y={80 - (v / max) * 76}
+              width="3"
+              height={(v / max) * 76}
+              fill="currentColor"
+            />
+          ))}
+        </svg>
+        <div className="range-labels">
+          <span>暗部</span>
+          <span>中间调</span>
+          <span>高光</span>
+        </div>
+        <p>
+          清晰度 45% + 曝光保留 30% + 纯净度
+          25%；缺失项不当作满分，按已测权重归一。缺少清晰度时只给分项结论，不给总分。
+        </p>
+        <p>
+          清晰度使用较清晰的一半有效区域，减少背景虚化干扰；自动采样不是主体识别。可在图片上点选主体复查。
+        </p>
+        <p>
+          明暗层次只作描述，不因黑白、低饱和或创作风格扣分。手机照片得到较好技术参考分，也不表示它使用了优秀镜头。
+        </p>
+        <p className="muted">
+          {photo.noise.note} 曝光概览 {photo.overviewDimensions.width}×
+          {photo.overviewDimensions.height}；细节与噪声均取原像素。
+        </p>
+      </details>
+    </>
+  );
 }
