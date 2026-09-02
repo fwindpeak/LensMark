@@ -1,19 +1,38 @@
+import type { ROI } from '../types/mtf.ts';
+import type { TestScene } from '../types/assessment.ts';
+import { AnalysisEngine } from './analysisEngine.ts';
+import { readPixels } from './pixels.ts';
 
-import type { AnalysisResult } from '../types/evaluation';
-import type { ROI } from '../types/mtf';
-import { analyzeMtf } from './mtf';
-import { detectSlantedEdges } from './autoEdgeDetector';
-import { evaluatePhotoQuality, measureSubject, subjectRoi } from './photoQuality';
-import { clampRoi, readPixels } from './pixels';
-let image: ImageBitmap | null = null, cached: AnalysisResult | null = null;
-self.onmessage = (event: MessageEvent<{ id: number; image?: ImageBitmap; roi: ROI }>) => {
-  const { id, roi } = event.data;
+let image: ImageBitmap | null = null,
+  engine: AnalysisEngine | null = null;
+self.onmessage = (
+  event: MessageEvent<{
+    id: number;
+    image?: ImageBitmap;
+    roi: ROI | null;
+    scene: TestScene;
+    subjectOnly?: boolean;
+  }>,
+) => {
+  const { id, roi, scene, subjectOnly } = event.data;
   try {
-    if (event.data.image) { image?.close(); image = event.data.image; cached = null; }
-    if (!image) throw new Error('请先导入图片');
-    const r = clampRoi(roi, image.width, image.height), sr = subjectRoi(r, image.width, image.height);
-    const photo = cached ? { ...cached.photo, subject: measureSubject(readPixels(image, sr), sr) } : evaluatePhotoQuality(image, image.width, image.height, r);
-    cached = { photo, mtf: analyzeMtf(image, r), edges: cached?.edges ?? detectSlantedEdges(image) };
-    self.postMessage({ id, result: cached });
-  } catch (e) { self.postMessage({ id, error: e instanceof Error ? e.message : '分析失败' }); }
+    if (event.data.image) {
+      image?.close();
+      image = event.data.image;
+      self.postMessage({ id, progress: '检查曝光、噪声与主体轮廓…' });
+      engine = new AnalysisEngine(
+        (r, w, h) => readPixels(image!, r, w, h),
+        image.width,
+        image.height,
+      );
+    }
+    if (!engine) throw new Error('请先导入图片');
+    self.postMessage({ id, progress: '测量中心、边角与色差…' });
+    self.postMessage({ id, result: engine.analyze(roi, scene, subjectOnly) });
+  } catch (e) {
+    self.postMessage({
+      id,
+      error: e instanceof Error ? e.message : '分析失败',
+    });
+  }
 };

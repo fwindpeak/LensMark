@@ -1,16 +1,89 @@
-
 import { useRef } from 'react';
+import { Aperture, Upload, HelpCircle } from 'lucide-react';
 import type { AnalysisMode } from '../types/mtf';
-import { SAMPLE_PRESETS } from '../core/sampleImages';
-import type { SamplePreset } from '../core/sampleImages';
-const modes: [AnalysisMode, string][] = [['photo_quality', '照片检查'], ['lens_performance', '镜头证据'], ['slanted_edge', '局部 MTF'], ['overview', '测量记录']];
-export function Header({ mode, onModeChange, onFileUpload, onSelectSample, onToggleGuide }: {
-  mode: AnalysisMode; onModeChange: (m: AnalysisMode) => void; onFileUpload: (f: File) => void;
-  onSelectSample: (p: SamplePreset) => void; onToggleGuide: () => void;
+import { DEMOS } from '../core/demoImages';
+import type { DemoKind } from '../core/demoImages';
+
+export function Header({
+  mode,
+  onModeChange,
+  onFiles,
+  onDemo,
+  onGuide,
+  count,
+}: {
+  mode: AnalysisMode;
+  onModeChange: (mode: AnalysisMode) => void;
+  onFiles: (files: File[]) => void;
+  onDemo: (kind: DemoKind) => void;
+  onGuide: () => void;
+  count: number;
 }) {
   const input = useRef<HTMLInputElement>(null);
-  return <header className="app-header"><div className="brand"><span className="brand-icon">L</span><div><h1>LensMark</h1><p>照片检查 · 镜头成像特征测量</p></div></div>
-    <div className="header-actions"><button onClick={onToggleGuide}>拍摄指南</button><select aria-label="合成演示" value="" onChange={e => { const p = SAMPLE_PRESETS.find(p => p.id === e.target.value); if (p) onSelectSample(p); }}><option value="">试用合成演示</option>{SAMPLE_PRESETS.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select><button className="primary" onClick={() => input.current?.click()}>导入照片</button><input ref={input} type="file" hidden accept="image/jpeg,image/png,image/webp,image/avif,image/bmp,.arw,.cr2,.cr3,.nef,.nrw,.dng,.raf,.orf,.rw2,.pef,.srw,.3fr,.mef,.mrw,.raw" onChange={e => { const f = e.target.files?.[0]; if (f) onFileUpload(f); e.target.value = ''; }} /></div>
-    <nav aria-label="分析功能">{modes.map(([id, label]) => <button key={id} aria-current={id === mode ? 'page' : undefined} onClick={() => onModeChange(id)}>{label}</button>)}</nav>
-  </header>;
+  return (
+    <header className="app-header">
+      <a className="brand" href="#top" aria-label="LensMark 首页">
+        <Aperture size={30} />
+        <span>
+          LensMark<small>照片与镜头评估</small>
+        </span>
+      </a>
+      <div className="header-actions">
+        <button className="quiet" onClick={onGuide}>
+          <HelpCircle size={16} />
+          拍摄指南
+        </button>
+        <select
+          aria-label="试用合成样张"
+          value=""
+          onChange={(e) => onDemo(e.target.value as DemoKind)}
+        >
+          <option value="">试用样张</option>
+          {DEMOS.map((d) => (
+            <option key={d.id} value={d.id}>
+              {d.name}
+            </option>
+          ))}
+        </select>
+        <button className="primary" onClick={() => input.current?.click()}>
+          <Upload size={16} />
+          上传照片
+        </button>
+        <input
+          ref={input}
+          data-testid="file-input"
+          type="file"
+          hidden
+          multiple
+          accept="image/jpeg,image/png,image/webp,image/avif,image/bmp,.arw,.cr2,.cr3,.nef,.nrw,.dng,.raf,.orf,.rw2,.pef,.srw,.3fr,.mef,.mrw,.raw"
+          onChange={(e) => {
+            if (e.target.files?.length) onFiles(Array.from(e.target.files));
+            e.target.value = '';
+          }}
+        />
+      </div>
+      <nav aria-label="评估功能">
+        {(
+          [
+            ['photo_quality', '照片评价'],
+            ['lens_performance', '镜头评价'],
+            ['overview', '照片对比 · ' + count],
+          ] as const
+        ).map(([id, label]) => (
+          <button
+            key={id}
+            aria-current={
+              mode === id ||
+              (id === 'lens_performance' && mode === 'slanted_edge')
+                ? 'page'
+                : undefined
+            }
+            onClick={() => onModeChange(id)}
+          >
+            {label}
+          </button>
+        ))}
+      </nav>
+    </header>
+  );
 }

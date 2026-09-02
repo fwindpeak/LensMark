@@ -1,18 +1,29 @@
-
 import { useEffect, useRef, useState } from 'react';
-import type { AnalysisMode, DetectedEdge, ROI } from './types/mtf';
-import type { AnalysisResult, MeasurementRecord, SourceKind } from './types/evaluation';
+import { Upload, ImagePlus, ShieldCheck } from 'lucide-react';
+import type { AnalysisMode, ROI } from './types/mtf';
+import type { AnalysisResult, SourceKind } from './types/evaluation';
 import { SOURCE_LABELS } from './types/evaluation';
+import type { EvaluationRecord, TestScene } from './types/assessment';
 import type { ParsedExifResult } from './types/exif';
 import { decodeRawImage, isRawFile } from './core/rawDecoder';
 import { parsePhotoExif } from './core/exifReader';
-import { evaluateLensPerformance } from './core/lensPerformance';
+import { AnalysisClient } from './core/analysisClient';
 import { downloadText } from './core/comparison';
-import { SLANTED_EDGE_PRESET } from './core/sampleImages';
-import type { SamplePreset } from './core/sampleImages';
+import { demoImage, DEMOS } from './core/demoImages';
+import type { DemoKind } from './core/demoImages';
+import {
+  makeRecord,
+  parseRecords,
+  migrateLegacyRecords,
+  RECORDS_KEY,
+} from './core/evaluationRecords';
+import { abortable } from './core/cancellation';
 import { Header } from './components/Header';
 import { ImageWorkspace } from './components/ImageWorkspace';
-import { PhotoQualityReport } from './components/PhotoQualityReport';
+import {
+  PhotoQualityReport,
+  PhotoSummary,
+} from './components/PhotoQualityReport';
 import { LensPerformanceReport } from './components/LensPerformanceReport';
 import { ComparisonPanel } from './components/ComparisonPanel';
 import { MetricsCards } from './components/MetricsCards';
@@ -20,115 +31,604 @@ import { MtfChart } from './components/Charts/MtfChart';
 import { EsfLsfChart } from './components/Charts/EsfLsfChart';
 import { GuideModal } from './components/GuideSection';
 import { ExifViewerModal } from './components/ExifViewerModal';
-const RECORDS_KEY = 'lensmark.measurements.v2';
-function readRecords(): MeasurementRecord[] {
-  try {
-    const value = JSON.parse(localStorage.getItem(RECORDS_KEY) || '[]');
-    return Array.isArray(value) ? value.filter(r => r && typeof r.id === 'string' && typeof r.fileName === 'string' && r.roi && Number.isFinite(r.width) && Number.isFinite(r.height) && (r.mtf50 === null || Number.isFinite(r.mtf50))).slice(0, 50) : [];
-  } catch { return []; }
+
+interface LoadedPhoto {
+  id: string;
+  image: HTMLImageElement;
+  name: string;
+  source: SourceKind;
+  exif: ParsedExifResult | null;
+  note: string;
+  thumbnail: string;
 }
-async function fileImage(file: File): Promise<HTMLImageElement> {
-  const url = URL.createObjectURL(file);
-  try { const image = new Image(); image.src = url; await image.decode(); return image; }
-  catch { throw new Error('浏览器无法解码此图片。请使用 JPEG、PNG、WebP，或支持的相机 RAW；HEIC/TIFF 请先转换。'); }
-  finally { URL.revokeObjectURL(url); }
+function readRecords() {
+  try {
+    const saved = localStorage.getItem(RECORDS_KEY);
+    return saved === null
+      ? migrateLegacyRecords(
+          localStorage.getItem('lensmark.measurements.v2') ?? '[]',
+        )
+      : parseRecords(saved);
+  } catch {
+    return [];
+  }
+}
+function thumbnail(image: HTMLImageElement) {
+  const c = document.createElement('canvas'),
+    ratio = Math.min(
+      1,
+      240 / Math.max(image.naturalWidth, image.naturalHeight),
+    );
+  c.width = Math.max(1, Math.round(image.naturalWidth * ratio));
+  c.height = Math.max(1, Math.round(image.naturalHeight * ratio));
+  const ctx = c.getContext('2d');
+  if (!ctx) return '';
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, c.width, c.height);
+  ctx.drawImage(image, 0, 0, c.width, c.height);
+  return c.toDataURL('image/jpeg', 0.65);
+}
+async function readImage(
+  file: File,
+  signal: AbortSignal,
+): Promise<HTMLImageElement> {
+  const url = URL.createObjectURL(file),
+    image = new Image();
+  try {
+    image.src = url;
+    await abortable(image.decode(), signal);
+    return image;
+  } catch (e) {
+    if (signal.aborted) throw e;
+    throw new Error(
+      '无法读取这张图片。请使用 JPEG、PNG、WebP 或支持的相机 RAW。',
+    );
+  } finally {
+    URL.revokeObjectURL(url);
+  }
 }
 export function App() {
-  const [image, setImage] = useState<HTMLImageElement | null>(null), [fileName, setFileName] = useState('');
-  const [source, setSource] = useState<SourceKind>('rendered'), [sourceNote, setSourceNote] = useState('');
-  const [exif, setExif] = useState<ParsedExifResult | null>(null);
-  const [mode, setMode] = useState<AnalysisMode>('photo_quality');
-  const [roi, setRoi] = useState<ROI>({ x: 0, y: 0, w: 200, h: 200 });
+  const [current, setCurrent] = useState<LoadedPhoto | null>(null);
+  const currentRef = useRef<LoadedPhoto | null>(null);
+  const [mode, setMode] = useState<AnalysisMode>('photo_quality'),
+    [scene, setScene] = useState<TestScene>('general');
   const [result, setResult] = useState<AnalysisResult | null>(null);
-  const [busy, setBusy] = useState(false), [status, setStatus] = useState(''), [error, setError] = useState('');
-  const [guide, setGuide] = useState(false), [exifOpen, setExifOpen] = useState(false);
-  const [records, setRecords] = useState<MeasurementRecord[]>(readRecords);
-  const worker = useRef<Worker | null>(null), job = useRef(0), load = useRef(0), timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [saved, setSaved] = useState(false);
-  useEffect(() => () => { load.current++; job.current++; worker.current?.terminate(); if (timer.current) clearTimeout(timer.current); }, []);
-  useEffect(() => { try { localStorage.setItem(RECORDS_KEY, JSON.stringify(records)); } catch { setError('浏览器无法保存记录；请导出 CSV，避免刷新后丢失。'); } }, [records]);
-  function stopWorker() { worker.current?.terminate(); worker.current = null; if (timer.current) clearTimeout(timer.current); }
-  function cancel() { load.current++; job.current++; stopWorker(); setBusy(false); setStatus('已取消，可重新导入或重试分析。'); }
-  function beginLoad() {
-    const token = ++load.current; job.current++; stopWorker(); setImage(null); setResult(null); setExif(null);
-    setSourceNote(''); setError(''); setBusy(true); setSaved(false); setStatus('正在读取图片…'); return token;
-  }
-  async function analyze(img: HTMLImageElement, area: ROI, fresh: boolean) {
-    const id = ++job.current;
-    setBusy(true); setResult(null); setSaved(false); setStatus('正在分析原像素与候选斜边…'); setError('');
+  const [roi, setRoi] = useState<ROI>({ x: 0, y: 0, w: 200, h: 200 }),
+    [subjectOnly, setSubjectOnly] = useState(false);
+  const [busy, setBusy] = useState(false),
+    [status, setStatus] = useState(''),
+    [error, setError] = useState('');
+  const [guide, setGuide] = useState(false),
+    [exifOpen, setExifOpen] = useState(false);
+  const [records, setRecords] = useState<EvaluationRecord[]>(readRecords);
+  const [removed, setRemoved] = useState<EvaluationRecord | null>(null);
+  const input = useRef<HTMLInputElement>(null),
+    client = useRef(new AnalysisClient()),
+    version = useRef(0);
+  const abort = useRef<AbortController | null>(null),
+    uploading = useRef(false);
+  useEffect(
+    () => () => {
+      version.current++;
+      abort.current?.abort();
+      client.current.dispose();
+    },
+    [],
+  );
+  useEffect(() => {
     try {
-      const bitmap = fresh || !worker.current ? await createImageBitmap(img) : undefined;
-      if (id !== job.current) { bitmap?.close(); return; }
-      if (!worker.current) {
-        worker.current = new Worker(new URL('./core/analysis.worker.ts', import.meta.url), { type: 'module' });
-        worker.current.onmessage = (event: MessageEvent<{ id: number; result?: AnalysisResult; error?: string }>) => {
-          if (event.data.id !== job.current) return;
-          if (timer.current) clearTimeout(timer.current);
-          setBusy(false); setStatus('分析完成');
-          if (event.data.error) { setError(event.data.error); setResult(null); }
-          else setResult(event.data.result ?? null);
-        };
-        worker.current.onerror = () => { stopWorker(); setBusy(false); setResult(null); setError('后台分析无法运行，请使用支持 Worker 与 OffscreenCanvas 的现代浏览器后重试。'); };
-      }
-      if (timer.current) clearTimeout(timer.current);
-      timer.current = setTimeout(() => { if (job.current === id) { job.current++; stopWorker(); setBusy(false); setError('分析超时。请缩小选区或换用较小的原图后重试。'); } }, 45000);
-      worker.current.postMessage({ id, roi: area, image: bitmap }, bitmap ? [bitmap] : []);
-    } catch (e) { if (id === job.current) { stopWorker(); setBusy(false); setError(e instanceof Error ? e.message : '分析失败'); } }
+      localStorage.setItem(RECORDS_KEY, JSON.stringify(records));
+    } catch {
+      setError(
+        '浏览器保存空间不足，请在对比页导出记录备份；当前报告仍可查看。',
+      );
+    }
+  }, [records]);
+
+  function stop() {
+    version.current++;
+    abort.current?.abort();
+    client.current.dispose();
+    uploading.current = false;
   }
-  async function acceptImage(img: HTMLImageElement, name: string, kind: SourceKind, parsed: ParsedExifResult | null, note: string, token: number) {
-    if (token !== load.current) return;
-    if (!img.naturalWidth || !img.naturalHeight) throw new Error('图片尺寸无效');
-    if (img.naturalWidth * img.naturalHeight > 100_000_000) throw new Error('图片超过 1 亿像素，请先导出较小版本；报告将只描述导入版本。');
-    const w = Math.min(220, img.naturalWidth), h = Math.min(220, img.naturalHeight);
-    const area = { x: Math.floor((img.naturalWidth - w) / 2), y: Math.floor((img.naturalHeight - h) / 2), w, h };
-    setImage(img); setFileName(name); setSource(kind); setSourceNote(note); setExif(parsed); setRoi(area);
-    await analyze(img, area, true);
+  function cancel() {
+    stop();
+    setBusy(false);
+    setStatus('已取消。已完成的报告已保留，可继续上传或重试。');
   }
-  async function upload(file: File) {
-    const token = beginLoad(); setFileName(file.name);
+  function remember(
+    photo: LoadedPhoto,
+    analysis: AnalysisResult,
+    testScene: TestScene,
+  ) {
+    const record = makeRecord(analysis, {
+      id: photo.id,
+      name: photo.name,
+      source: photo.source,
+      scene: testScene,
+      exif: photo.exif,
+      thumbnail: photo.thumbnail,
+    });
+    setRecords((previous) => {
+      const old = previous.find((r) => r.id === photo.id);
+      // Preserve user-supplied metadata when a scene is remeasured.
+      const merged = old
+        ? {
+            ...record,
+            camera: old.camera,
+            lens: old.lens,
+            aperture: old.aperture,
+            focalLength: old.focalLength,
+            iso: old.iso,
+          }
+        : record;
+      return [merged, ...previous.filter((r) => r.id !== photo.id)].slice(
+        0,
+        50,
+      );
+    });
+  }
+  async function analyze(
+    photo: LoadedPhoto,
+    testScene: TestScene,
+    area: ROI | null,
+    onlySubject: boolean,
+    token: number,
+    prefix = '',
+  ) {
+    const analysis = await client.current.run(
+      photo.image,
+      area,
+      testScene,
+      onlySubject,
+      (message) => {
+        if (token === version.current) setStatus(prefix + message);
+      },
+    );
+    if (token !== version.current) return;
+    setResult(analysis);
+    setRoi(analysis.selection);
+    setSubjectOnly(onlySubject);
+    // Subject spot-checks must not silently replace a full-photo comparison score.
+    if (!onlySubject) remember(photo, analysis, testScene);
+    return analysis;
+  }
+  async function rerun(
+    testScene = scene,
+    area: ROI | null = null,
+    onlySubject = false,
+  ) {
+    const photo = currentRef.current;
+    if (!photo || uploading.current) return;
+    const token = ++version.current;
+    setScene(testScene);
+    setBusy(true);
+    setResult(null);
+    setError('');
     try {
-      if (file.size > 200 * 1024 * 1024) throw new Error('文件超过 200 MB，请导出较小版本后重试。');
-      if (isRawFile(file)) {
-        const raw = await decodeRawImage(file, msg => { if (token === load.current) setStatus(msg); });
-        await acceptImage(raw.image, file.name, raw.sourceKind, raw.exifResult, raw.decoderInfo, token);
-      } else {
-        const [img, parsed] = await Promise.all([fileImage(file), parsePhotoExif(file).catch(() => null)]);
-        await acceptImage(img, file.name, 'rendered', parsed, '', token);
+      await analyze(photo, testScene, area, onlySubject, token);
+      if (token === version.current) {
+        setBusy(false);
+        setStatus('分析完成 · 报告已保存');
       }
-    } catch (e) { if (token === load.current) { setError(e instanceof Error ? e.message : '读取失败'); setBusy(false); setStatus('读取失败'); } }
+    } catch (e) {
+      if (token === version.current) {
+        setBusy(false);
+        setError(e instanceof Error ? e.message : '分析失败');
+      }
+    }
   }
-  async function preset(p: SamplePreset) {
-    const token = beginLoad();
-    setMode(p.id === SLANTED_EDGE_PRESET.id ? 'slanted_edge' : 'photo_quality');
-    try { await acceptImage(await p.generator(), p.name, 'synthetic', null, '数值来自实际演示像素，不提供预设镜头成绩。', token); }
-    catch (e) { if (token === load.current) { setBusy(false); setError(e instanceof Error ? e.message : '演示加载失败'); } }
+  async function accept(
+    photo: LoadedPhoto,
+    testScene: TestScene,
+    token: number,
+    prefix = '',
+  ) {
+    if (token !== version.current) return;
+    const { naturalWidth: w, naturalHeight: h } = photo.image;
+    if (!w || !h || w * h > 100_000_000)
+      throw new Error('图片尺寸无效或超过 1 亿像素，请导出较小版本。');
+    photo.thumbnail = thumbnail(photo.image);
+    currentRef.current = photo;
+    setCurrent(photo);
+    setScene(testScene);
+    setSubjectOnly(false);
+    setResult(null);
+    await analyze(photo, testScene, null, false, token, prefix);
   }
-  function changeRoi(r: ROI) { setRoi(r); if (image) void analyze(image, r, false); }
-  function selectEdge(e: DetectedEdge) { setMode('slanted_edge'); changeRoi(e.roi); }
-  function saveMeasurement() {
-    if (!image || !result?.mtf.isValid || result.mtf.mtf50 === null || source === 'raw_preview' || source === 'synthetic') return;
-    const m = exif?.overview;
-    const record: MeasurementRecord = {
-      id: crypto.randomUUID(), fileName, source, camera: m?.model || '', lens: m?.lensModel || '',
-      aperture: m?.fNumber ?? null, focalLength: m?.focalLength ?? null, iso: m?.iso ?? null,
-      width: image.naturalWidth, height: image.naturalHeight, roi, mtf50: result.mtf.mtf50,
-      angle: result.mtf.angleDeg, orientation: result.mtf.isVerticalEdge ? 'vertical' : 'horizontal', createdAt: new Date().toISOString()
-    };
-    setRecords(prev => [...prev, record].slice(-50)); setSaved(true);
+  async function upload(files: File[]) {
+    if (!files.length) return;
+    stop();
+    const token = version.current,
+      controller = new AbortController();
+    abort.current = controller;
+    uploading.current = true;
+    setBusy(true);
+    setError('');
+    setResult(null);
+    const selected = files.slice(0, 12),
+      failures: string[] = [];
+    let completed = 0;
+    const testScene = mode === 'photo_quality' ? 'general' : scene;
+    for (let i = 0; i < selected.length; i++) {
+      if (token !== version.current) break;
+      const file = selected[i],
+        prefix =
+          selected.length > 1 ? i + 1 + '/' + selected.length + ' · ' : '';
+      setStatus(prefix + '正在读取 ' + file.name);
+      const timeout = setTimeout(
+        () => controller.abort(new Error('文件解码超时')),
+        60000,
+      );
+      try {
+        if (file.size > 200 * 1024 * 1024) throw new Error('文件超过 200 MB');
+        let photo: LoadedPhoto;
+        if (isRawFile(file)) {
+          const raw = await decodeRawImage(
+            file,
+            (message) => {
+              if (token === version.current) setStatus(prefix + message);
+            },
+            undefined,
+            controller.signal,
+          );
+          photo = {
+            id: crypto.randomUUID(),
+            image: raw.image,
+            name: file.name,
+            source: raw.sourceKind,
+            exif: raw.exifResult,
+            note: raw.decoderInfo,
+            thumbnail: '',
+          };
+        } else {
+          const [image, exif] = await abortable(
+            Promise.all([
+              readImage(file, controller.signal),
+              parsePhotoExif(file).catch(() => null),
+            ]),
+            controller.signal,
+          );
+          photo = {
+            id: crypto.randomUUID(),
+            image,
+            name: file.name,
+            source: 'rendered',
+            exif,
+            note: '',
+            thumbnail: '',
+          };
+        }
+        clearTimeout(timeout);
+        await accept(photo, testScene, token, prefix);
+        completed++;
+      } catch (e) {
+        if (token !== version.current) break;
+        failures.push(
+          file.name +
+            '：' +
+            (controller.signal.aborted
+              ? '读取超时，请换较小文件重试'
+              : e instanceof Error
+                ? e.message
+                : '无法读取'),
+        );
+        if (controller.signal.aborted) break;
+      } finally {
+        clearTimeout(timeout);
+      }
+    }
+    if (token === version.current) {
+      uploading.current = false;
+      setBusy(false);
+      setStatus(
+        '完成 ' +
+          completed +
+          ' 张' +
+          (completed ? ' · 报告已保存到对比页' : '') +
+          (files.length > 12 ? '；每批最多 12 张，剩余请继续上传' : ''),
+      );
+      setError(failures.join('；'));
+    }
   }
-  const lensReport = evaluateLensPerformance(result?.mtf ?? null, source);
-  return <div className="app-shell"><Header mode={mode} onModeChange={setMode} onFileUpload={upload} onSelectSample={preset} onToggleGuide={() => setGuide(true)} />
-    {error && <div className="error-banner" role="alert">{error}{image && !busy && <button onClick={() => analyze(image, roi, true)}>重试分析</button>}</div>}
-    {(busy || status) && <div className="status-bar" role="status" aria-live="polite"><span>{busy && <span className="spinner" />}{status}</span>{busy && <button onClick={cancel}>取消</button>}</div>}
-    {image && <div className="file-bar"><div><b>{fileName}</b><span>{SOURCE_LABELS[source]}</span>{sourceNote && <small>{sourceNote}</small>}</div><div className="header-actions"><button onClick={() => setExifOpen(true)}>EXIF 参数</button><button disabled={!result || busy} onClick={() => downloadText('LensMark-report.json', JSON.stringify({ schemaVersion: 2, fileName, source, sourceNote, roi, photo: result?.photo, mtf: result?.mtf, lens: lensReport }, null, 2))}>导出报告</button></div></div>}
-    {mode === 'overview' ? <main className="records-main"><ComparisonPanel records={records} onRemove={id => setRecords(r => r.filter(x => x.id !== id))} /></main> : image ? <main className="analysis-layout">
-      <ImageWorkspace image={image} roi={roi} onRoiChange={changeRoi} onDropFile={upload} edges={result?.edges ?? []} onSelectEdge={selectEdge} sampleRoi={result?.photo.subject.roi} />
-      <aside className="report-stack" aria-busy={busy}>{busy ? <section className="report-card"><h2>正在分析</h2><p>你可以继续调整选区，页面将显示最后一次选择的结果。</p></section> : result ? <>
-        {mode === 'photo_quality' && <PhotoQualityReport report={result.photo} />}
-        {mode === 'lens_performance' && <LensPerformanceReport report={lensReport} onSwitchToEdgeRoiMode={() => setMode('slanted_edge')} />}
-        {mode === 'slanted_edge' && <><section className="report-card"><div className="eyebrow">局部空间频率响应</div><h2>框选一条斜边</h2><p>建议约 5°，两侧平坦且不过曝，选区至少 48×48 原像素。依次测量中心与四角，分别保存。</p></section><MetricsCards result={result.mtf} /><div className="report-card"><MtfChart result={result.mtf} /></div><details className="report-card"><summary>查看 ESF / LSF 曲线</summary><EsfLsfChart result={result.mtf} /></details><section className="report-card"><button className="primary" disabled={!result.mtf.isValid || result.mtf.mtf50 === null || saved || source === 'synthetic' || source === 'raw_preview'} onClick={saveMeasurement}>{saved ? '已保存到测量记录' : '保存本次测量'}</button><p className="muted">合成图与 RAW 内嵌预览不加入实拍记录。最多保留 50 条；缺少 EXIF 的记录可导出，但不自动计算差值。</p></section></>}
-      </> : <section className="report-card"><p>分析尚未完成。可重试或导入另一张图片。</p><button onClick={() => analyze(image, roi, true)}>开始分析</button></section>}</aside>
-    </main> : <main className="welcome" onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) void upload(f); }}><div className="eyebrow">看清成片 · 积累证据</div><h2>一张照片，先回答能测的问题。</h2><p>导入原图，检查曝光和局部细节；想比较镜头，再用相同条件拍摄的斜边样张测量。照片不会上传。</p><div className="welcome-grid"><article><b>01 · 照片检查</b><p>曝光分布、平坦区噪声、原像素细节。</p></article><article><b>02 · 镜头测量</b><p>局部系统 MTF、有效性筛查与拍摄指南。</p></article><article><b>03 · 同条件记录</b><p>独立记录不同镜头与光圈，导出对比。</p></article></div><div className="drop-hint">把照片拖到这里，或点击顶部“导入照片”</div><button onClick={() => preset(SLANTED_EDGE_PRESET)}>先试试合成斜边 →</button><p className="muted">支持 JPEG / PNG / WebP 与常见相机 RAW。RAW 支持情况取决于解码器；使用内嵌预览时会明确提示。</p></main>}
-    <GuideModal isOpen={guide} onClose={() => setGuide(false)} /><ExifViewerModal isOpen={exifOpen} onClose={() => setExifOpen(false)} exifResult={exif} fileName={fileName} />
-  </div>;
+  async function demo(kind: DemoKind) {
+    const preset = DEMOS.find((d) => d.id === kind);
+    if (!preset) return;
+    stop();
+    const token = version.current;
+    setBusy(true);
+    setError('');
+    setStatus('正在生成合成演示…');
+    setMode(preset.scene === 'general' ? 'photo_quality' : 'lens_performance');
+    try {
+      const image = await demoImage(kind);
+      await accept(
+        {
+          id: crypto.randomUUID(),
+          image,
+          name: preset.name + '（合成演示）',
+          source: 'synthetic',
+          exif: null,
+          note: '演示像素，不代表任何真实镜头；所有结果均由同一分析流程计算。',
+          thumbnail: '',
+        },
+        preset.scene,
+        token,
+      );
+      if (token === version.current) {
+        setBusy(false);
+        setStatus('合成演示已完成');
+      }
+    } catch (e) {
+      if (token === version.current) {
+        setBusy(false);
+        setError(e instanceof Error ? e.message : '演示加载失败');
+      }
+    }
+  }
+  function select(roi: ROI) {
+    void rerun(scene, roi, mode === 'photo_quality');
+  }
+  function inspectEdge(roi: ROI) {
+    setMode('slanted_edge');
+    void rerun(scene, roi, false);
+  }
+  function updateRecord(record: EvaluationRecord) {
+    setRecords((r) => r.map((item) => (item.id === record.id ? record : item)));
+  }
+  function importRecords(incoming: EvaluationRecord[]) {
+    setRecords((previous) =>
+      [
+        ...incoming,
+        ...previous.filter((r) => !incoming.some((n) => n.id === r.id)),
+      ].slice(0, 50),
+    );
+  }
+  function exportReport() {
+    if (!result || !current) return;
+    downloadText(
+      current.name.replace(/\.[^.]+$/, '') + '-LensMark.json',
+      JSON.stringify(
+        {
+          version: 3,
+          fileName: current.name,
+          source: current.source,
+          scene,
+          subjectOnly,
+          analysis: result,
+        },
+        null,
+        2,
+      ),
+    );
+  }
+  return (
+    <div className="app-shell" id="top">
+      <Header
+        mode={mode}
+        onModeChange={setMode}
+        onFiles={upload}
+        onDemo={demo}
+        onGuide={() => setGuide(true)}
+        count={records.length}
+      />
+      {(busy || status) && (
+        <div className="status-bar" role="status" aria-live="polite">
+          <span>
+            {busy && <span className="spinner" />}
+            {status}
+          </span>
+          {busy && <button onClick={cancel}>取消</button>}
+        </div>
+      )}
+      {error && (
+        <div className="error-banner" role="alert">
+          {error}
+          <button onClick={() => setError('')}>关闭</button>
+          {current && !busy && (
+            <button onClick={() => rerun()}>重试当前照片</button>
+          )}
+        </div>
+      )}
+      {mode === 'overview' ? (
+        <main className="records-main">
+          {removed && (
+            <div className="undo-bar">
+              已删除 {removed.fileName}
+              <button
+                onClick={() => {
+                  importRecords([removed]);
+                  setRemoved(null);
+                }}
+              >
+                撤销
+              </button>
+            </div>
+          )}
+          <ComparisonPanel
+            records={records}
+            onUpdate={updateRecord}
+            onImport={importRecords}
+            onRemove={(id) => {
+              setRemoved(records.find((r) => r.id === id) ?? null);
+              setRecords((r) => r.filter((item) => item.id !== id));
+            }}
+          />
+        </main>
+      ) : current ? (
+        <main className="analysis-main" aria-busy={busy}>
+          <div className="file-bar">
+            <div>
+              <b>{current.name}</b>
+              <span>
+                {SOURCE_LABELS[current.source]}
+                {current.exif?.overview.model
+                  ? ' · ' + current.exif.overview.model
+                  : ''}
+              </span>
+            </div>
+            <div className="button-row">
+              <button onClick={() => setExifOpen(true)}>拍摄信息</button>
+              <button disabled={!result || busy} onClick={exportReport}>
+                导出报告
+              </button>
+              <button onClick={() => setMode('overview')}>查看对比</button>
+            </div>
+          </div>
+          {current.source === 'synthetic' && (
+            <div className="source-banner">合成演示 · {current.note}</div>
+          )}
+          {current.source === 'raw_preview' && (
+            <div className="source-banner">
+              正在分析 RAW
+              内嵌预览，可检查这张预览的画质；它不用于原像素镜头排名。
+            </div>
+          )}
+          {result && mode === 'photo_quality' && (
+            <PhotoSummary
+              assessment={result.assessment}
+              subjectOnly={subjectOnly}
+            />
+          )}
+          {result && mode !== 'photo_quality' && (
+            <section className="lens-heading">
+              <div>
+                <div className="eyebrow">镜头成像表现</div>
+                <h2>
+                  {scene === 'flat'
+                    ? '暗角与亮度均匀性'
+                    : scene === 'grid'
+                      ? '直线保持与几何畸变'
+                      : '解析力、色差，一眼看清'}
+                </h2>
+                <p>
+                  先看实测表现，再用同机身、同条件样张比较镜头。结论描述成片，包含对焦和图像处理的影响。
+                </p>
+              </div>
+            </section>
+          )}
+          <div className="analysis-layout">
+            <div className="visual-column">
+              <ImageWorkspace
+                image={current.image}
+                roi={roi}
+                onRoiChange={select}
+                onDropFiles={upload}
+                edges={result?.edges ?? []}
+                onSelectEdge={(e) => inspectEdge(e.roi)}
+                sampleRoi={result?.photo.subject.roi}
+                onAuto={() => rerun(scene)}
+                subjectOnly={subjectOnly}
+              />
+              {result && (
+                <details
+                  className="report-card curve-details"
+                  open={mode === 'slanted_edge'}
+                >
+                  <summary>局部 MTF 曲线与专业数据</summary>
+                  <MetricsCards result={result.mtf} />
+                  {result.mtf.isValid && (
+                    <>
+                      <MtfChart result={result.mtf} />
+                      <EsfLsfChart result={result.mtf} />
+                    </>
+                  )}
+                  {!result.mtf.isValid && (
+                    <p>
+                      照片仍可评价。要测局部 MTF，请选择 2°–15°
+                      的单一直斜边，或在镜头页使用测试靶。
+                    </p>
+                  )}
+                </details>
+              )}
+            </div>
+            <div className="report-stack">
+              {result ? (
+                mode === 'photo_quality' ? (
+                  <PhotoQualityReport result={result} />
+                ) : (
+                  <LensPerformanceReport
+                    result={result}
+                    scene={scene}
+                    onScene={(s) => rerun(s)}
+                    onSelect={inspectEdge}
+                    onDemo={demo}
+                  />
+                )
+              ) : (
+                <section className="report-card loading-panel">
+                  <h2>{busy ? '正在分析照片' : '等待分析'}</h2>
+                  <p>
+                    {busy
+                      ? '曝光、清晰度和镜头测量完成后会自动显示。'
+                      : '点击重试继续检查这张照片。'}
+                  </p>
+                  {!busy && <button onClick={() => rerun()}>重试分析</button>}
+                </section>
+              )}
+            </div>
+          </div>
+        </main>
+      ) : (
+        <main
+          className="welcome"
+          onDragOver={(e) => e.preventDefault()}
+          onDrop={(e) => {
+            e.preventDefault();
+            void upload(Array.from(e.dataTransfer.files));
+          }}
+        >
+          <div className="upload-card">
+            <ImagePlus size={38} />
+            <h2>这张照片拍得怎么样？</h2>
+            <p>上传即得清晰度、曝光、噪点结论；进一步测量和对比镜头表现。</p>
+            <button
+              className="primary large"
+              onClick={() => input.current?.click()}
+            >
+              <Upload size={18} />
+              选择照片
+            </button>
+            <span>或拖入这里 · 可批量选择最多 12 张</span>
+            <input
+              ref={input}
+              type="file"
+              hidden
+              multiple
+              accept="image/*,.arw,.cr2,.cr3,.nef,.dng,.raf,.orf,.rw2,.raw"
+              onChange={(e) => {
+                if (e.target.files) void upload(Array.from(e.target.files));
+                e.target.value = '';
+              }}
+            />
+            <small>
+              <ShieldCheck size={14} />
+              照片不上传服务器 · JPEG / PNG / WebP / 常见 RAW
+            </small>
+          </div>
+          <section className="demo-strip">
+            <h3>没有照片？先体验实际分析</h3>
+            <div>
+              {DEMOS.map((d) => (
+                <button key={d.id} onClick={() => demo(d.id)}>
+                  {d.name} →
+                </button>
+              ))}
+            </div>
+            <small>合成样张用于理解工具，结果不是预设成绩。</small>
+          </section>
+          <p className="welcome-footnote">
+            照片评价辅助判断成片技术质量；镜头评价支持九区解析力、横向色差、平场暗角和网格畸变。缺少专用样张时，会给出下一步拍摄入口。
+          </p>
+        </main>
+      )}
+      <GuideModal isOpen={guide} onClose={() => setGuide(false)} />
+      <ExifViewerModal
+        isOpen={exifOpen}
+        onClose={() => setExifOpen(false)}
+        exifResult={current?.exif ?? null}
+        fileName={current?.name}
+      />
+    </div>
+  );
 }
