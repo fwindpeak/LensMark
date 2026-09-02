@@ -215,7 +215,6 @@ export function App() {
     const token = ++version.current;
     setScene(testScene);
     setBusy(true);
-    setResult(null);
     setError('');
     try {
       await analyze(photo, testScene, area, onlySubject, token);
@@ -426,7 +425,7 @@ export function App() {
         theme={theme}
         onToggleTheme={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
       />
-      {(busy || status) && (
+      {(busy || status) && !current && (
         <div className="status-bar" role="status" aria-live="polite">
           <span>
             {busy && <span className="spinner" />}
@@ -479,6 +478,12 @@ export function App() {
                 {current.exif?.overview.model
                   ? ' · ' + current.exif.overview.model
                   : ''}
+                {current.source === 'raw_preview'
+                  ? ' · RAW 内嵌预览'
+                  : ''}
+                {current.source === 'synthetic'
+                  ? ' · 合成演示'
+                  : ''}
               </span>
             </div>
             <div className="button-row">
@@ -492,14 +497,6 @@ export function App() {
             exifResult={current.exif}
             onOpenExifModal={() => setExifOpen(true)}
           />
-          {current.source === 'synthetic' && (
-            <div className="source-banner">合成演示 · {current.note}</div>
-          )}
-          {current.source === 'raw_preview' && (
-            <div className="source-banner">
-              正在分析 RAW 内嵌预览图（用于评估预览画质，不代表原 RAW 原像素评级）。
-            </div>
-          )}
           {result && mode !== 'photo_quality' && (
             <section className="lens-heading">
               <div>
@@ -529,6 +526,9 @@ export function App() {
                 sampleRoi={result?.photo.subject.roi}
                 onAuto={() => rerun(scene)}
                 subjectOnly={subjectOnly}
+                status={status}
+                busy={busy}
+                onCancel={cancel}
               />
               {result && (
                 <details

@@ -12,6 +12,9 @@ export function ImageWorkspace({
   sampleRoi,
   onAuto,
   subjectOnly,
+  status,
+  busy,
+  onCancel,
 }: {
   image: HTMLImageElement;
   roi: ROI;
@@ -22,6 +25,9 @@ export function ImageWorkspace({
   sampleRoi?: ROI;
   onAuto: () => void;
   subjectOnly: boolean;
+  status?: string;
+  busy?: boolean;
+  onCancel?: () => void;
 }) {
   const canvas = useRef<HTMLCanvasElement>(null),
     crop = useRef<HTMLCanvasElement>(null);
@@ -218,6 +224,17 @@ export function ImageWorkspace({
             vectorEffect="non-scaling-stroke"
           />
         </svg>
+        {(busy || status) && (
+          <div className="canvas-status-overlay" role="status" aria-live="polite">
+            {busy && <span className="spinner" />}
+            <span>{status}</span>
+            {busy && onCancel && (
+              <button className="quiet" onClick={onCancel}>
+                取消
+              </button>
+            )}
+          </div>
+        )}
       </div>
       <details className="roi-details">
         <summary>精确选区坐标</summary>
