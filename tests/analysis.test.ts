@@ -114,3 +114,20 @@ test('CSV escapes untrusted filenames and preserves missing values', () => {
   const csv = recordsToCsv([{ ...record, fileName: '=1+2', lens: 'a,"b', mtf50: null }]);
   assert.ok(csv.includes('"'+ "'=1+2" + '"')); assert.ok(csv.includes('"a,""b"')); assert.equal(csv.includes('null'), false);
 });
+
+
+test('Welcome slanted-edge demo has a measurable default center ROI', async () => {
+  const { slantedEdgePixels } = await import('../src/core/synthetic.ts');
+  const { SLANTED_EDGE_PRESET, SAMPLE_PRESETS } = await import('../src/core/sampleImages.ts');
+  assert.ok(SAMPLE_PRESETS.includes(SLANTED_EDGE_PRESET));
+  const full = slantedEdgePixels();
+  const data = new Uint8ClampedArray(220 * 220 * 4);
+  for (let y = 0; y < 220; y++) {
+    const start = ((y + 90) * full.width + 90) * 4;
+    data.set(full.data.subarray(start, start + 220 * 4), y * 220 * 4);
+  }
+  const result = analyzeMtfPixels({ data, width: 220, height: 220 });
+  assert.equal(result.isValid, true, result.errorMessage);
+  assert.ok(result.mtf50 !== null && result.mtf50 > 0 && result.mtf50 < .5);
+  assert.ok(Math.abs(Math.abs(result.angleDeg) - 5.7) < .2);
+});

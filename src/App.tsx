@@ -8,7 +8,7 @@ import { decodeRawImage, isRawFile } from './core/rawDecoder';
 import { parsePhotoExif } from './core/exifReader';
 import { evaluateLensPerformance } from './core/lensPerformance';
 import { downloadText } from './core/comparison';
-import { SAMPLE_PRESETS } from './core/sampleImages';
+import { SLANTED_EDGE_PRESET } from './core/sampleImages';
 import type { SamplePreset } from './core/sampleImages';
 import { Header } from './components/Header';
 import { ImageWorkspace } from './components/ImageWorkspace';
@@ -99,6 +99,7 @@ export function App() {
   }
   async function preset(p: SamplePreset) {
     const token = beginLoad();
+    setMode(p.id === SLANTED_EDGE_PRESET.id ? 'slanted_edge' : 'photo_quality');
     try { await acceptImage(await p.generator(), p.name, 'synthetic', null, '数值来自实际演示像素，不提供预设镜头成绩。', token); }
     catch (e) { if (token === load.current) { setBusy(false); setError(e instanceof Error ? e.message : '演示加载失败'); } }
   }
@@ -127,7 +128,7 @@ export function App() {
         {mode === 'lens_performance' && <LensPerformanceReport report={lensReport} onSwitchToEdgeRoiMode={() => setMode('slanted_edge')} />}
         {mode === 'slanted_edge' && <><section className="report-card"><div className="eyebrow">局部空间频率响应</div><h2>框选一条斜边</h2><p>建议约 5°，两侧平坦且不过曝，选区至少 48×48 原像素。依次测量中心与四角，分别保存。</p></section><MetricsCards result={result.mtf} /><div className="report-card"><MtfChart result={result.mtf} /></div><details className="report-card"><summary>查看 ESF / LSF 曲线</summary><EsfLsfChart result={result.mtf} /></details><section className="report-card"><button className="primary" disabled={!result.mtf.isValid || result.mtf.mtf50 === null || saved || source === 'synthetic' || source === 'raw_preview'} onClick={saveMeasurement}>{saved ? '已保存到测量记录' : '保存本次测量'}</button><p className="muted">合成图与 RAW 内嵌预览不加入实拍记录。最多保留 50 条；缺少 EXIF 的记录可导出，但不自动计算差值。</p></section></>}
       </> : <section className="report-card"><p>分析尚未完成。可重试或导入另一张图片。</p><button onClick={() => analyze(image, roi, true)}>开始分析</button></section>}</aside>
-    </main> : <main className="welcome" onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) void upload(f); }}><div className="eyebrow">看清成片 · 积累证据</div><h2>一张照片，先回答能测的问题。</h2><p>导入原图，检查曝光和局部细节；想比较镜头，再用相同条件拍摄的斜边样张测量。照片不会上传。</p><div className="welcome-grid"><article><b>01 · 照片检查</b><p>曝光分布、平坦区噪声、原像素细节。</p></article><article><b>02 · 镜头测量</b><p>局部系统 MTF、有效性筛查与拍摄指南。</p></article><article><b>03 · 同条件记录</b><p>独立记录不同镜头与光圈，导出对比。</p></article></div><div className="drop-hint">把照片拖到这里，或点击顶部“导入照片”</div><button onClick={() => preset(SAMPLE_PRESETS[SAMPLE_PRESETS.length - 1])}>先试试合成斜边 →</button><p className="muted">支持 JPEG / PNG / WebP 与常见相机 RAW。RAW 支持情况取决于解码器；使用内嵌预览时会明确提示。</p></main>}
+    </main> : <main className="welcome" onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) void upload(f); }}><div className="eyebrow">看清成片 · 积累证据</div><h2>一张照片，先回答能测的问题。</h2><p>导入原图，检查曝光和局部细节；想比较镜头，再用相同条件拍摄的斜边样张测量。照片不会上传。</p><div className="welcome-grid"><article><b>01 · 照片检查</b><p>曝光分布、平坦区噪声、原像素细节。</p></article><article><b>02 · 镜头测量</b><p>局部系统 MTF、有效性筛查与拍摄指南。</p></article><article><b>03 · 同条件记录</b><p>独立记录不同镜头与光圈，导出对比。</p></article></div><div className="drop-hint">把照片拖到这里，或点击顶部“导入照片”</div><button onClick={() => preset(SLANTED_EDGE_PRESET)}>先试试合成斜边 →</button><p className="muted">支持 JPEG / PNG / WebP 与常见相机 RAW。RAW 支持情况取决于解码器；使用内嵌预览时会明确提示。</p></main>}
     <GuideModal isOpen={guide} onClose={() => setGuide(false)} /><ExifViewerModal isOpen={exifOpen} onClose={() => setExifOpen(false)} exifResult={exif} fileName={fileName} />
   </div>;
 }
