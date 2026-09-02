@@ -210,11 +210,67 @@ a:hover { text-decoration: underline; }
 .demo-strip h3 { font-size: 15px; }
 .welcome-footnote { color: var(--text-muted); font-size: 13px; margin: 20px 0; line-height: 1.6; }
 
-.analysis-main { padding: 0 24px 32px; }
-.file-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 0 10px; }
+.file-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 0 6px; }
 .file-bar > div { min-width: 0; }
 .file-bar b { display: block; overflow-wrap: anywhere; font-size: 16px; font-weight: 650; }
 .file-bar span { display: block; font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+
+.exposure-triangle-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 14px;
+  background: var(--card-bg-subtle);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  margin: 6px 0 14px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.exposure-triangle-bar:hover {
+  border-color: var(--accent-color);
+  background: var(--accent-glow);
+}
+.exposure-tags {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.exp-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  border-radius: 6px;
+  font-size: 12px;
+  background: var(--card-bg);
+  border: 1px solid var(--border-color);
+  color: var(--text-color);
+  font-variant-numeric: tabular-nums;
+}
+.exp-tag.aperture, .exp-tag.shutter, .exp-tag.iso {
+  background: var(--accent-glow);
+  border-color: var(--accent-color);
+  color: var(--accent-color);
+}
+.exp-tag.camera b, .exp-tag.aperture b, .exp-tag.shutter b, .exp-tag.iso b {
+  font-weight: 650;
+}
+.exp-tag.fallback {
+  color: var(--text-muted);
+}
+.exp-more-btn {
+  font-size: 12px;
+  padding: 4px 10px;
+  min-height: 28px;
+  color: var(--text-muted);
+}
+.exp-more-btn:hover {
+  color: var(--accent-color);
+}
 
 .source-banner { padding: 10px 14px; background: var(--card-bg-subtle); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-color); font-size: 13px; margin-bottom: 14px; }
 

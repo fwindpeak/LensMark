@@ -28,11 +28,18 @@ export function PhotoSummary({
     </section>
   );
 }
-export function PhotoQualityReport({ result }: { result: AnalysisResult }) {
+export function PhotoQualityReport({
+  result,
+  subjectOnly,
+}: {
+  result: AnalysisResult;
+  subjectOnly: boolean;
+}) {
   const { assessment, photo } = result;
   const max = Math.max(1, ...assessment.histogram);
   return (
     <>
+      <PhotoSummary assessment={assessment} subjectOnly={subjectOnly} />
       <section className="quality-grid" aria-label="照片评价指标">
         {assessment.metrics.map((m) => (
           <article className={'metric-card ' + m.rating} key={m.id}>

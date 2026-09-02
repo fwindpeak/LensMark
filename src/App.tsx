@@ -20,10 +20,7 @@ import {
 import { abortable } from './core/cancellation';
 import { Header } from './components/Header';
 import { ImageWorkspace } from './components/ImageWorkspace';
-import {
-  PhotoQualityReport,
-  PhotoSummary,
-} from './components/PhotoQualityReport';
+import { PhotoQualityReport } from './components/PhotoQualityReport';
 import { LensPerformanceReport } from './components/LensPerformanceReport';
 import { ComparisonPanel } from './components/ComparisonPanel';
 import { MetricsCards } from './components/MetricsCards';
@@ -31,6 +28,7 @@ import { MtfChart } from './components/Charts/MtfChart';
 import { EsfLsfChart } from './components/Charts/EsfLsfChart';
 import { GuideModal } from './components/GuideSection';
 import { ExifViewerModal } from './components/ExifViewerModal';
+import { ExifBadge } from './components/ExifBadge';
 
 interface LoadedPhoto {
   id: string;
@@ -484,13 +482,16 @@ export function App() {
               </span>
             </div>
             <div className="button-row">
-              <button onClick={() => setExifOpen(true)}>拍摄信息</button>
               <button disabled={!result || busy} onClick={exportReport}>
                 导出报告
               </button>
               <button onClick={() => setMode('overview')}>查看对比</button>
             </div>
           </div>
+          <ExifBadge
+            exifResult={current.exif}
+            onOpenExifModal={() => setExifOpen(true)}
+          />
           {current.source === 'synthetic' && (
             <div className="source-banner">合成演示 · {current.note}</div>
           )}
@@ -498,12 +499,6 @@ export function App() {
             <div className="source-banner">
               正在分析 RAW 内嵌预览图（用于评估预览画质，不代表原 RAW 原像素评级）。
             </div>
-          )}
-          {result && mode === 'photo_quality' && (
-            <PhotoSummary
-              assessment={result.assessment}
-              subjectOnly={subjectOnly}
-            />
           )}
           {result && mode !== 'photo_quality' && (
             <section className="lens-heading">
@@ -560,7 +555,10 @@ export function App() {
             <div className="report-stack">
               {result ? (
                 mode === 'photo_quality' ? (
-                  <PhotoQualityReport result={result} />
+                  <PhotoQualityReport
+                    result={result}
+                    subjectOnly={subjectOnly}
+                  />
                 ) : (
                   <LensPerformanceReport
                     result={result}
