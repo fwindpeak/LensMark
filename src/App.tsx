@@ -1,654 +1,134 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
-import {
-  ROI,
-  MTFResult,
-  LensQualityResult,
-  DetectedEdge,
-  AnalysisMode,
-} from './types/mtf';
-import { ParsedExifResult } from './types/exif';
-import {
-  analyzeMtf,
-  analyzeLensQuality,
-  detectSlantedEdges,
-  parsePhotoExif,
-  isRawFile,
-  decodeRawImage,
-  evaluatePhotoQuality,
-  evaluateLensPerformance,
-} from './core';
-import { PhotoQualityReport as PhotoQualityReportType, LensPerformanceReport as LensPerformanceReportType } from './types/evaluation';
-import { SAMPLE_PRESETS, SamplePreset } from './core/sampleImages';
+
+import { useEffect, useRef, useState } from 'react';
+import type { AnalysisMode, DetectedEdge, ROI } from './types/mtf';
+import type { AnalysisResult, MeasurementRecord, SourceKind } from './types/evaluation';
+import { SOURCE_LABELS } from './types/evaluation';
+import type { ParsedExifResult } from './types/exif';
+import { decodeRawImage, isRawFile } from './core/rawDecoder';
+import { parsePhotoExif } from './core/exifReader';
+import { evaluateLensPerformance } from './core/lensPerformance';
+import { downloadText } from './core/comparison';
+import { SLANTED_EDGE_PRESET } from './core/sampleImages';
+import type { SamplePreset } from './core/sampleImages';
 import { Header } from './components/Header';
 import { ImageWorkspace } from './components/ImageWorkspace';
-import { LensOverviewPanel } from './components/LensOverviewPanel';
 import { PhotoQualityReport } from './components/PhotoQualityReport';
 import { LensPerformanceReport } from './components/LensPerformanceReport';
+import { ComparisonPanel } from './components/ComparisonPanel';
 import { MetricsCards } from './components/MetricsCards';
 import { MtfChart } from './components/Charts/MtfChart';
 import { EsfLsfChart } from './components/Charts/EsfLsfChart';
 import { GuideModal } from './components/GuideSection';
 import { ExifViewerModal } from './components/ExifViewerModal';
-import { Info, ArrowLeft, Loader2 } from 'lucide-react';
-
-export const App: React.FC = () => {
-  const [image, setImage] = useState<HTMLImageElement | null>(null);
-  const [fileName, setFileName] = useState<string>('ISO 12233 标板样张');
-  const [isSynthetic, setIsSynthetic] = useState<boolean>(true);
-  const isSyntheticRef = useRef<boolean>(true);
-  const [isRaw, setIsRaw] = useState<boolean>(false);
-  const isRawRef = useRef<boolean>(false);
+const RECORDS_KEY = 'lensmark.measurements.v2';
+function readRecords(): MeasurementRecord[] {
+  try {
+    const value = JSON.parse(localStorage.getItem(RECORDS_KEY) || '[]');
+    return Array.isArray(value) ? value.filter(r => r && typeof r.id === 'string' && typeof r.fileName === 'string' && r.roi && Number.isFinite(r.width) && Number.isFinite(r.height) && (r.mtf50 === null || Number.isFinite(r.mtf50))).slice(0, 50) : [];
+  } catch { return []; }
+}
+async function fileImage(file: File): Promise<HTMLImageElement> {
+  const url = URL.createObjectURL(file);
+  try { const image = new Image(); image.src = url; await image.decode(); return image; }
+  catch { throw new Error('浏览器无法解码此图片。请使用 JPEG、PNG、WebP，或支持的相机 RAW；HEIC/TIFF 请先转换。'); }
+  finally { URL.revokeObjectURL(url); }
+}
+export function App() {
+  const [image, setImage] = useState<HTMLImageElement | null>(null), [fileName, setFileName] = useState('');
+  const [source, setSource] = useState<SourceKind>('rendered'), [sourceNote, setSourceNote] = useState('');
+  const [exif, setExif] = useState<ParsedExifResult | null>(null);
   const [mode, setMode] = useState<AnalysisMode>('photo_quality');
-
-  // RAW 解码状态
-  const [isDecodingRaw, setIsDecodingRaw] = useState<boolean>(false);
-  const [rawDecodeStatus, setRawDecodeStatus] = useState<string>('');
-
-  // EXIF 元数据状态
-  const [exifResult, setExifResult] = useState<ParsedExifResult | null>(null);
-  const [isExifModalOpen, setIsExifModalOpen] = useState<boolean>(false);
-
-  // ROI 选区
-  const [roi, setRoi] = useState<ROI>({ x: 500, y: 320, w: 200, h: 160 });
-
-  // 双维度分析结果
-  const [photoReport, setPhotoReport] = useState<PhotoQualityReportType | null>(null);
-  const [lensReport, setLensReport] = useState<LensPerformanceReportType | null>(null);
-  const [lensResult, setLensResult] = useState<LensQualityResult | null>(null);
-  const [detectedEdges, setDetectedEdges] = useState<DetectedEdge[]>([]);
-  const [mtfResult, setMtfResult] = useState<MTFResult | null>(null);
-
-  // 视口与热力图控制
-  const [showHeatmap, setShowHeatmap] = useState<boolean>(true);
-  const [heatmapOpacity, setHeatmapOpacity] = useState<number>(0.65);
-  const [showEdgeBadges, setShowEdgeBadges] = useState<boolean>(true);
-  const [activeZoneId, setActiveZoneId] = useState<string | null>(null);
-
-  // 弹窗说明
-  const [isGuideOpen, setIsGuideOpen] = useState<boolean>(false);
-
-  // 全面分析图像 (照片技术质量 + 镜头光学归因 + 自动斜边扫描 + 当前 ROI MTF)
-  const processImageAnalysis = useCallback(
-    (
-      img: HTMLImageElement,
-      currentRoi: ROI,
-      parsedExif?: ParsedExifResult | null,
-      isSynth?: boolean,
-      isRawInput?: boolean
-    ) => {
-      const synth = isSynth !== undefined ? isSynth : isSyntheticRef.current;
-      const raw = isRawInput !== undefined ? isRawInput : isRawRef.current;
-      let calculatedMtf: MTFResult | null = null;
-
-      // 1. 当前 ROI 斜边测量
-      try {
-        calculatedMtf = analyzeMtf(img, currentRoi);
-        setMtfResult(calculatedMtf);
-      } catch (err) {
-        console.error('Failed to analyze MTF on ROI:', err);
-      }
-
-      // 2. 照片技术质量评估 (Photo Technical Quality)
-      let photoRes: PhotoQualityReportType | null = null;
-      try {
-        photoRes = evaluatePhotoQuality(
-          img,
-          currentRoi,
-          img.naturalWidth,
-          img.naturalHeight,
-          parsedExif?.overview,
-          raw
-        );
-        setPhotoReport(photoRes);
-      } catch (err) {
-        console.error('Failed to evaluate photo quality:', err);
-      }
-
-      // 3. 镜头光学表现与归因检查 (Lens Optical Performance)
-      if (photoRes) {
-        try {
-          const lensPerf = evaluateLensPerformance(
-            img,
-            photoRes,
-            calculatedMtf,
-            parsedExif,
-            img.naturalWidth,
-            img.naturalHeight,
-            synth,
-            raw
-          );
-          setLensReport(lensPerf);
-        } catch (err) {
-          console.error('Failed to evaluate lens performance:', err);
-        }
-      }
-
-      // 4. 全图镜头光学成像质量热力图与 9 像场
-      try {
-        const lq = analyzeLensQuality(
-          img,
-          img.naturalWidth,
-          img.naturalHeight,
-          parsedExif?.overview
-        );
-        setLensResult(lq);
-      } catch (err) {
-        console.error('Failed to analyze lens quality:', err);
-      }
-
-      // 5. 自动检测斜边
-      try {
-        const edges = detectSlantedEdges(img);
-        setDetectedEdges(edges);
-      } catch (err) {
-        console.error('Failed to detect edges:', err);
-      }
-    },
-    []
-  );
-
-  // 加载初始预设样张
-  const loadPreset = useCallback(
-    async (preset: SamplePreset) => {
-      try {
-        const img = await preset.generator();
-        setImage(img);
-        setFileName(preset.name);
-        setIsSynthetic(true);
-        isSyntheticRef.current = true;
-        setIsRaw(false);
-        isRawRef.current = false;
-        setExifResult(null);
-        setActiveZoneId(null);
-
-        const rw = Math.min(220, Math.floor((img.naturalWidth || 800) * 0.3));
-        const rh = Math.min(220, Math.floor((img.naturalHeight || 600) * 0.3));
-        const defaultRoi: ROI = {
-          x: Math.floor(((img.naturalWidth || 800) - rw) / 2),
-          y: Math.floor(((img.naturalHeight || 600) - rh) / 2),
-          w: rw,
-          h: rh,
-        };
-        setRoi(defaultRoi);
-        processImageAnalysis(img, defaultRoi, null, true, false);
-      } catch (err) {
-        console.error('Failed to load sample preset:', err);
-      }
-    },
-    [processImageAnalysis]
-  );
-
-  // 仅在首次挂载时加载默认样张 (ISO 12233 标板样张)
-  useEffect(() => {
-    loadPreset(SAMPLE_PRESETS[0]);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // 处理本地图片与 RAW 格式照片上传 (包括 LibRaw WebAssembly 解码与 EXIF 全量提取)
-  const handleFileUpload = async (file: File) => {
-    // 1. 判断是否为 RAW 格式照片
-    if (isRawFile(file)) {
-      try {
-        setIsDecodingRaw(true);
-        setRawDecodeStatus('正在初始化 LibRaw WebAssembly 解码器...');
-
-        const result = await decodeRawImage(file, (msg) => {
-          setRawDecodeStatus(msg);
-        });
-
-        const img = result.image;
-        setImage(img);
-        setFileName(`${file.name} [RAW]`);
-        setIsSynthetic(false);
-        isSyntheticRef.current = false;
-        setIsRaw(true);
-        isRawRef.current = true;
-        setExifResult(result.exifResult);
-        setActiveZoneId(null);
-
-        // 默认居中框选区域
-        const rw = Math.min(240, Math.floor(img.naturalWidth * 0.35));
-        const rh = Math.min(240, Math.floor(img.naturalHeight * 0.35));
-        const defaultRoi: ROI = {
-          x: Math.floor((img.naturalWidth - rw) / 2),
-          y: Math.floor((img.naturalHeight - rh) / 2),
-          w: rw,
-          h: rh,
-        };
-        setRoi(defaultRoi);
-        processImageAnalysis(img, defaultRoi, result.exifResult, false, true);
-      } catch (err) {
-        console.error('Failed to decode RAW file:', err);
-        alert(`RAW 格式照片解码失败: ${err instanceof Error ? err.message : '未知错误'}`);
-      } finally {
-        setIsDecodingRaw(false);
-        setRawDecodeStatus('');
-      }
-      return;
-    }
-
-    // 2. 常规 RGB 格式 (JPEG/PNG/WebP/TIFF) 处理
-    let parsed: ParsedExifResult | null = null;
+  const [roi, setRoi] = useState<ROI>({ x: 0, y: 0, w: 200, h: 200 });
+  const [result, setResult] = useState<AnalysisResult | null>(null);
+  const [busy, setBusy] = useState(false), [status, setStatus] = useState(''), [error, setError] = useState('');
+  const [guide, setGuide] = useState(false), [exifOpen, setExifOpen] = useState(false);
+  const [records, setRecords] = useState<MeasurementRecord[]>(readRecords);
+  const worker = useRef<Worker | null>(null), job = useRef(0), load = useRef(0), timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [saved, setSaved] = useState(false);
+  useEffect(() => () => { load.current++; job.current++; worker.current?.terminate(); if (timer.current) clearTimeout(timer.current); }, []);
+  useEffect(() => { try { localStorage.setItem(RECORDS_KEY, JSON.stringify(records)); } catch { setError('浏览器无法保存记录；请导出 CSV，避免刷新后丢失。'); } }, [records]);
+  function stopWorker() { worker.current?.terminate(); worker.current = null; if (timer.current) clearTimeout(timer.current); }
+  function cancel() { load.current++; job.current++; stopWorker(); setBusy(false); setStatus('已取消，可重新导入或重试分析。'); }
+  function beginLoad() {
+    const token = ++load.current; job.current++; stopWorker(); setImage(null); setResult(null); setExif(null);
+    setSourceNote(''); setError(''); setBusy(true); setSaved(false); setStatus('正在读取图片…'); return token;
+  }
+  async function analyze(img: HTMLImageElement, area: ROI, fresh: boolean) {
+    const id = ++job.current;
+    setBusy(true); setResult(null); setSaved(false); setStatus('正在分析原像素与候选斜边…'); setError('');
     try {
-      parsed = await parsePhotoExif(file);
-      setExifResult(parsed);
-    } catch (err) {
-      console.warn('Failed to parse EXIF from file:', err);
-      setExifResult(null);
-    }
-
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const img = new Image();
-      img.onload = () => {
-        setImage(img);
-        setFileName(file.name);
-        setIsSynthetic(false);
-        isSyntheticRef.current = false;
-        setIsRaw(false);
-        isRawRef.current = false;
-        setActiveZoneId(null);
-
-        // 默认居中框选区域
-        const rw = Math.min(240, Math.floor(img.naturalWidth * 0.35));
-        const rh = Math.min(240, Math.floor(img.naturalHeight * 0.35));
-        const defaultRoi: ROI = {
-          x: Math.floor((img.naturalWidth - rw) / 2),
-          y: Math.floor((img.naturalHeight - rh) / 2),
-          w: rw,
-          h: rh,
+      const bitmap = fresh || !worker.current ? await createImageBitmap(img) : undefined;
+      if (id !== job.current) { bitmap?.close(); return; }
+      if (!worker.current) {
+        worker.current = new Worker(new URL('./core/analysis.worker.ts', import.meta.url), { type: 'module' });
+        worker.current.onmessage = (event: MessageEvent<{ id: number; result?: AnalysisResult; error?: string }>) => {
+          if (event.data.id !== job.current) return;
+          if (timer.current) clearTimeout(timer.current);
+          setBusy(false); setStatus('分析完成');
+          if (event.data.error) { setError(event.data.error); setResult(null); }
+          else setResult(event.data.result ?? null);
         };
-        setRoi(defaultRoi);
-        processImageAnalysis(img, defaultRoi, parsed, false, false);
-      };
-      if (typeof e.target?.result === 'string') {
-        img.src = e.target.result;
+        worker.current.onerror = () => { stopWorker(); setBusy(false); setResult(null); setError('后台分析无法运行，请使用支持 Worker 与 OffscreenCanvas 的现代浏览器后重试。'); };
       }
+      if (timer.current) clearTimeout(timer.current);
+      timer.current = setTimeout(() => { if (job.current === id) { job.current++; stopWorker(); setBusy(false); setError('分析超时。请缩小选区或换用较小的原图后重试。'); } }, 45000);
+      worker.current.postMessage({ id, roi: area, image: bitmap }, bitmap ? [bitmap] : []);
+    } catch (e) { if (id === job.current) { stopWorker(); setBusy(false); setError(e instanceof Error ? e.message : '分析失败'); } }
+  }
+  async function acceptImage(img: HTMLImageElement, name: string, kind: SourceKind, parsed: ParsedExifResult | null, note: string, token: number) {
+    if (token !== load.current) return;
+    if (!img.naturalWidth || !img.naturalHeight) throw new Error('图片尺寸无效');
+    if (img.naturalWidth * img.naturalHeight > 100_000_000) throw new Error('图片超过 1 亿像素，请先导出较小版本；报告将只描述导入版本。');
+    const w = Math.min(220, img.naturalWidth), h = Math.min(220, img.naturalHeight);
+    const area = { x: Math.floor((img.naturalWidth - w) / 2), y: Math.floor((img.naturalHeight - h) / 2), w, h };
+    setImage(img); setFileName(name); setSource(kind); setSourceNote(note); setExif(parsed); setRoi(area);
+    await analyze(img, area, true);
+  }
+  async function upload(file: File) {
+    const token = beginLoad(); setFileName(file.name);
+    try {
+      if (file.size > 200 * 1024 * 1024) throw new Error('文件超过 200 MB，请导出较小版本后重试。');
+      if (isRawFile(file)) {
+        const raw = await decodeRawImage(file, msg => { if (token === load.current) setStatus(msg); });
+        await acceptImage(raw.image, file.name, raw.sourceKind, raw.exifResult, raw.decoderInfo, token);
+      } else {
+        const [img, parsed] = await Promise.all([fileImage(file), parsePhotoExif(file).catch(() => null)]);
+        await acceptImage(img, file.name, 'rendered', parsed, '', token);
+      }
+    } catch (e) { if (token === load.current) { setError(e instanceof Error ? e.message : '读取失败'); setBusy(false); setStatus('读取失败'); } }
+  }
+  async function preset(p: SamplePreset) {
+    const token = beginLoad();
+    setMode(p.id === SLANTED_EDGE_PRESET.id ? 'slanted_edge' : 'photo_quality');
+    try { await acceptImage(await p.generator(), p.name, 'synthetic', null, '数值来自实际演示像素，不提供预设镜头成绩。', token); }
+    catch (e) { if (token === load.current) { setBusy(false); setError(e instanceof Error ? e.message : '演示加载失败'); } }
+  }
+  function changeRoi(r: ROI) { setRoi(r); if (image) void analyze(image, r, false); }
+  function selectEdge(e: DetectedEdge) { setMode('slanted_edge'); changeRoi(e.roi); }
+  function saveMeasurement() {
+    if (!image || !result?.mtf.isValid || result.mtf.mtf50 === null || source === 'raw_preview' || source === 'synthetic') return;
+    const m = exif?.overview;
+    const record: MeasurementRecord = {
+      id: crypto.randomUUID(), fileName, source, camera: m?.model || '', lens: m?.lensModel || '',
+      aperture: m?.fNumber ?? null, focalLength: m?.focalLength ?? null, iso: m?.iso ?? null,
+      width: image.naturalWidth, height: image.naturalHeight, roi, mtf50: result.mtf.mtf50,
+      angle: result.mtf.angleDeg, orientation: result.mtf.isVerticalEdge ? 'vertical' : 'horizontal', createdAt: new Date().toISOString()
     };
-    reader.readAsDataURL(file);
-  };
-
-  // ROI 选区发生变化 (用户手动拖拽或居中)
-  const handleRoiChange = (newRoi: ROI) => {
-    setRoi(newRoi);
-    if (image) {
-      // 重新计算 MTF
-      let calculatedMtf: MTFResult | null = null;
-      try {
-        calculatedMtf = analyzeMtf(image, newRoi);
-        setMtfResult(calculatedMtf);
-      } catch (err) {
-        console.error('Failed to update MTF on ROI change:', err);
-      }
-
-      // 重新评估主体区域清晰度
-      try {
-        const updatedPhoto = evaluatePhotoQuality(
-          image,
-          newRoi,
-          image.naturalWidth,
-          image.naturalHeight,
-          exifResult?.overview,
-          isRawRef.current
-        );
-        setPhotoReport(updatedPhoto);
-
-        if (updatedPhoto) {
-          const updatedLens = evaluateLensPerformance(
-            image,
-            updatedPhoto,
-            calculatedMtf,
-            exifResult,
-            image.naturalWidth,
-            image.naturalHeight,
-            isSyntheticRef.current,
-            isRawRef.current
-          );
-          setLensReport(updatedLens);
-        }
-      } catch (err) {
-        console.error('Failed to update evaluations on ROI change:', err);
-      }
-    }
-  };
-
-  // 选中某个自动识别的斜边
-  const handleSelectEdge = (edge: DetectedEdge) => {
-    setRoi(edge.roi);
-    setMode('slanted_edge');
-    if (image) {
-      const res = analyzeMtf(image, edge.roi);
-      setMtfResult(res);
-    }
-  };
-
-  return (
-    <div
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        height: '100vh',
-        width: '100vw',
-        overflow: 'hidden',
-        backgroundColor: 'var(--bg-color)',
-      }}
-    >
-      {/* 顶部导航 */}
-      <Header
-        mode={mode}
-        onModeChange={setMode}
-        onFileUpload={handleFileUpload}
-        onSelectSample={loadPreset}
-        onToggleGuide={() => setIsGuideOpen(true)}
-        onOpenExif={() => setIsExifModalOpen(true)}
-        exifResult={exifResult}
-        fileName={fileName}
-        isSynthetic={isSynthetic}
-        isRaw={isRaw}
-      />
-
-      {/* 主工作区 */}
-      <main
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'minmax(0, 1fr) minmax(440px, 480px)',
-          gap: '16px',
-          padding: '16px 20px',
-          flex: 1,
-          minHeight: 0,
-          overflow: 'hidden',
-          alignItems: 'stretch',
-        }}
-      >
-        {/* 左侧视口 */}
-        <ImageWorkspace
-          image={image}
-          roi={roi}
-          mode={mode}
-          heatmap={lensResult?.heatmap || null}
-          showHeatmap={showHeatmap}
-          heatmapOpacity={heatmapOpacity}
-          detectedEdges={detectedEdges}
-          showEdgeBadges={showEdgeBadges}
-          activeZoneId={activeZoneId}
-          zones={lensResult?.zones || []}
-          onRoiChange={handleRoiChange}
-          onDropFile={handleFileUpload}
-          onToggleHeatmap={setShowHeatmap}
-          onChangeHeatmapOpacity={setHeatmapOpacity}
-          onToggleEdgeBadges={setShowEdgeBadges}
-          onSelectDetectedEdge={handleSelectEdge}
-        />
-
-        {/* 右侧面板 (独立垂直滚动) */}
-        <aside
-          style={{
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '16px',
-            height: '100%',
-            overflowY: 'auto',
-            overflowX: 'hidden',
-            paddingRight: '6px',
-            paddingBottom: '16px',
-          }}
-        >
-          {/* 模式 1: 照片技术质量报告 */}
-          {mode === 'photo_quality' && (
-            <PhotoQualityReport report={photoReport} />
-          )}
-
-          {/* 模式 2: 镜头光学表现报告 */}
-          {mode === 'lens_performance' && (
-            <LensPerformanceReport
-              report={lensReport}
-              onSwitchToEdgeRoiMode={() => setMode('slanted_edge')}
-            />
-          )}
-
-          {/* 模式 3: 全图镜头光学质量综合总览与 9 像场 */}
-          {mode === 'overview' && (
-            <LensOverviewPanel
-              lensResult={lensResult}
-              detectedEdges={detectedEdges}
-              activeZoneId={activeZoneId}
-              onHoverZone={setActiveZoneId}
-              onSelectEdge={handleSelectEdge}
-              onSwitchToEdgeMode={() => setMode('slanted_edge')}
-              onOpenExif={() => setIsExifModalOpen(true)}
-            />
-          )}
-
-          {/* 模式 4: 专业斜边 MTF / SFR 测量面板 */}
-          {mode === 'slanted_edge' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-              {/* 返回总览顶部栏 */}
-              <div
-                style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  padding: '6px 0',
-                }}
-              >
-                <button
-                  onClick={() => setMode('photo_quality')}
-                  style={{
-                    backgroundColor: 'rgba(255, 255, 255, 0.05)',
-                    border: '1px solid var(--border-color)',
-                    borderRadius: '6px',
-                    padding: '6px 12px',
-                    color: 'var(--text-color)',
-                    fontSize: '12px',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                  }}
-                  onMouseEnter={(e) => (e.currentTarget.style.borderColor = 'var(--accent-color)')}
-                  onMouseLeave={(e) => (e.currentTarget.style.borderColor = 'var(--border-color)')}
-                >
-                  <ArrowLeft size={14} />
-                  返回照片质量报告
-                </button>
-
-                {detectedEdges.length > 0 && (
-                  <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                    已自动定位 {detectedEdges.length} 处斜边
-                  </span>
-                )}
-              </div>
-
-              {/* 快速定位其他候选斜边切换栏 */}
-              {detectedEdges.length > 0 && (
-                <div
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                    overflowX: 'auto',
-                    paddingBottom: '4px',
-                  }}
-                >
-                  <span style={{ fontSize: '11px', color: 'var(--text-dim)', flexShrink: 0 }}>
-                    快速跳转:
-                  </span>
-                  {detectedEdges.map((e) => (
-                    <button
-                      key={e.id}
-                      onClick={() => handleSelectEdge(e)}
-                      style={{
-                        padding: '3px 8px',
-                        borderRadius: '4px',
-                        fontSize: '11px',
-                        backgroundColor:
-                          roi.x === e.roi.x && roi.y === e.roi.y
-                            ? 'var(--accent-color)'
-                            : 'rgba(255, 255, 255, 0.05)',
-                        color:
-                          roi.x === e.roi.x && roi.y === e.roi.y ? '#0b1120' : 'var(--text-muted)',
-                        border: '1px solid var(--border-subtle)',
-                        cursor: 'pointer',
-                        whiteSpace: 'nowrap',
-                        fontWeight: 600,
-                      }}
-                    >
-                      {e.zoneName} ({e.mtf50})
-                    </button>
-                  ))}
-                </div>
-              )}
-
-              {/* MTF50 与角度指标卡 */}
-              <MetricsCards result={mtfResult} />
-
-              {/* MTF 调制传递函数频域图表 */}
-              <div className="card-glass" style={{ padding: '12px' }}>
-                <MtfChart result={mtfResult} />
-              </div>
-
-              {/* ESF / LSF 空间域图表 */}
-              <div className="card-glass" style={{ padding: '12px' }}>
-                <EsfLsfChart result={mtfResult} />
-              </div>
-
-              {/* 测量提示与帮助快捷卡片 */}
-              <div
-                className="card-glass"
-                style={{
-                  padding: '12px 14px',
-                  fontSize: '12px',
-                  color: 'var(--text-muted)',
-                  lineHeight: 1.6,
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '6px',
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <span style={{ fontWeight: 600, color: 'var(--text-color)', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <Info size={14} color="var(--accent-color)" />
-                    ISO 12233 斜边测量要点
-                  </span>
-                  <button
-                    onClick={() => setIsGuideOpen(true)}
-                    style={{
-                      background: 'none',
-                      border: 'none',
-                      color: 'var(--accent-color)',
-                      cursor: 'pointer',
-                      fontSize: '11px',
-                      padding: 0,
-                    }}
-                  >
-                    查看完整算法规范
-                  </button>
-                </div>
-                <div>
-                  1. 选区需跨越一段 <strong>5°~10°</strong> 的平直黑白边界，两侧保留纯色过渡区。<br />
-                  2. <strong>MTF50</strong> 为调制对比度降至 50% 时的空间频率（cycles/pixel），数值越高表示解析力与边缘锐度越好。
-                </div>
-              </div>
-            </div>
-          )}
-        </aside>
-      </main>
-
-      {/* 原理说明弹窗 */}
-      <GuideModal isOpen={isGuideOpen} onClose={() => setIsGuideOpen(false)} />
-
-      {/* EXIF 元数据查看与导出弹窗 */}
-      <ExifViewerModal
-        isOpen={isExifModalOpen}
-        onClose={() => setIsExifModalOpen(false)}
-        exifResult={exifResult}
-        fileName={fileName}
-      />
-
-      {/* LibRaw WebAssembly RAW 照片解码加载遮罩 */}
-      {isDecodingRaw && (
-        <div
-          style={{
-            position: 'fixed',
-            inset: 0,
-            backgroundColor: 'rgba(11, 17, 32, 0.88)',
-            backdropFilter: 'blur(10px)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 999,
-            padding: '20px',
-          }}
-        >
-          <div
-            className="card-glass"
-            style={{
-              padding: '32px 36px',
-              maxWidth: '440px',
-              width: '100%',
-              textAlign: 'center',
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              gap: '16px',
-              border: '1px solid rgba(56, 189, 248, 0.3)',
-              boxShadow: '0 20px 50px rgba(0, 0, 0, 0.7)',
-            }}
-          >
-            <div
-              style={{
-                width: '56px',
-                height: '56px',
-                borderRadius: '16px',
-                background: 'linear-gradient(135deg, rgba(2, 132, 199, 0.2) 0%, rgba(56, 189, 248, 0.2) 100%)',
-                border: '1px solid rgba(56, 189, 248, 0.4)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                color: 'var(--accent-color)',
-              }}
-            >
-              <Loader2 size={28} className="spin" style={{ animation: 'spin 1.2s linear infinite' }} />
-            </div>
-
-            <div>
-              <h3 style={{ fontSize: '16px', fontWeight: 700, color: '#fff', margin: '0 0 6px 0' }}>
-                LibRaw WebAssembly RAW 格式解码中
-              </h3>
-              <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: 0, lineHeight: 1.6 }}>
-                {rawDecodeStatus || '正在通过纯浏览器端 WebAssembly 多线程解算相机 RAW 传感器信号与光学色彩...'}
-              </p>
-            </div>
-
-            <div
-              style={{
-                width: '100%',
-                height: '4px',
-                backgroundColor: 'rgba(255, 255, 255, 0.1)',
-                borderRadius: '2px',
-                overflow: 'hidden',
-                position: 'relative',
-              }}
-            >
-              <div
-                style={{
-                  position: 'absolute',
-                  top: 0,
-                  bottom: 0,
-                  left: 0,
-                  width: '60%',
-                  background: 'linear-gradient(90deg, #0284c7, #38bdf8)',
-                  borderRadius: '2px',
-                  animation: 'pulse 1.5s ease-in-out infinite',
-                }}
-              />
-            </div>
-
-            <span style={{ fontSize: '11px', color: '#64748b' }}>
-              支持 Sony ARW / Canon CR2·CR3 / Nikon NEF / Adobe DNG / Fuji RAF 等
-            </span>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-};
+    setRecords(prev => [...prev, record].slice(-50)); setSaved(true);
+  }
+  const lensReport = evaluateLensPerformance(result?.mtf ?? null, source);
+  return <div className="app-shell"><Header mode={mode} onModeChange={setMode} onFileUpload={upload} onSelectSample={preset} onToggleGuide={() => setGuide(true)} />
+    {error && <div className="error-banner" role="alert">{error}{image && !busy && <button onClick={() => analyze(image, roi, true)}>重试分析</button>}</div>}
+    {(busy || status) && <div className="status-bar" role="status" aria-live="polite"><span>{busy && <span className="spinner" />}{status}</span>{busy && <button onClick={cancel}>取消</button>}</div>}
+    {image && <div className="file-bar"><div><b>{fileName}</b><span>{SOURCE_LABELS[source]}</span>{sourceNote && <small>{sourceNote}</small>}</div><div className="header-actions"><button onClick={() => setExifOpen(true)}>EXIF 参数</button><button disabled={!result || busy} onClick={() => downloadText('LensMark-report.json', JSON.stringify({ schemaVersion: 2, fileName, source, sourceNote, roi, photo: result?.photo, mtf: result?.mtf, lens: lensReport }, null, 2))}>导出报告</button></div></div>}
+    {mode === 'overview' ? <main className="records-main"><ComparisonPanel records={records} onRemove={id => setRecords(r => r.filter(x => x.id !== id))} /></main> : image ? <main className="analysis-layout">
+      <ImageWorkspace image={image} roi={roi} onRoiChange={changeRoi} onDropFile={upload} edges={result?.edges ?? []} onSelectEdge={selectEdge} sampleRoi={result?.photo.subject.roi} />
+      <aside className="report-stack" aria-busy={busy}>{busy ? <section className="report-card"><h2>正在分析</h2><p>你可以继续调整选区，页面将显示最后一次选择的结果。</p></section> : result ? <>
+        {mode === 'photo_quality' && <PhotoQualityReport report={result.photo} />}
+        {mode === 'lens_performance' && <LensPerformanceReport report={lensReport} onSwitchToEdgeRoiMode={() => setMode('slanted_edge')} />}
+        {mode === 'slanted_edge' && <><section className="report-card"><div className="eyebrow">局部空间频率响应</div><h2>框选一条斜边</h2><p>建议约 5°，两侧平坦且不过曝，选区至少 48×48 原像素。依次测量中心与四角，分别保存。</p></section><MetricsCards result={result.mtf} /><div className="report-card"><MtfChart result={result.mtf} /></div><details className="report-card"><summary>查看 ESF / LSF 曲线</summary><EsfLsfChart result={result.mtf} /></details><section className="report-card"><button className="primary" disabled={!result.mtf.isValid || result.mtf.mtf50 === null || saved || source === 'synthetic' || source === 'raw_preview'} onClick={saveMeasurement}>{saved ? '已保存到测量记录' : '保存本次测量'}</button><p className="muted">合成图与 RAW 内嵌预览不加入实拍记录。最多保留 50 条；缺少 EXIF 的记录可导出，但不自动计算差值。</p></section></>}
+      </> : <section className="report-card"><p>分析尚未完成。可重试或导入另一张图片。</p><button onClick={() => analyze(image, roi, true)}>开始分析</button></section>}</aside>
+    </main> : <main className="welcome" onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) void upload(f); }}><div className="eyebrow">看清成片 · 积累证据</div><h2>一张照片，先回答能测的问题。</h2><p>导入原图，检查曝光和局部细节；想比较镜头，再用相同条件拍摄的斜边样张测量。照片不会上传。</p><div className="welcome-grid"><article><b>01 · 照片检查</b><p>曝光分布、平坦区噪声、原像素细节。</p></article><article><b>02 · 镜头测量</b><p>局部系统 MTF、有效性筛查与拍摄指南。</p></article><article><b>03 · 同条件记录</b><p>独立记录不同镜头与光圈，导出对比。</p></article></div><div className="drop-hint">把照片拖到这里，或点击顶部“导入照片”</div><button onClick={() => preset(SLANTED_EDGE_PRESET)}>先试试合成斜边 →</button><p className="muted">支持 JPEG / PNG / WebP 与常见相机 RAW。RAW 支持情况取决于解码器；使用内嵌预览时会明确提示。</p></main>}
+    <GuideModal isOpen={guide} onClose={() => setGuide(false)} /><ExifViewerModal isOpen={exifOpen} onClose={() => setExifOpen(false)} exifResult={exif} fileName={fileName} />
+  </div>;
+}

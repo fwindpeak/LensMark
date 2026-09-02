@@ -1,11 +1,8 @@
-import { ROI, DetectedEdge } from '../types/mtf';
-import { extractLinearGrayscale } from './grayscale';
-import { fitSlantedEdge } from './edgeDetection';
-import { buildEsfAndLsf } from './esfLsf';
-import { computeMtfFromLsf } from './dft';
+import type { ROI, DetectedEdge } from '../types/mtf.ts';
+import { analyzeMtf } from './mtf.ts';
 
 /**
- * 在全图中自动扫描并识别符合 ISO 12233 规范的高反差倾斜边缘
+ * 在全图中自动扫描并识别符合局部测量筛查条件的高反差倾斜边缘
  */
 export function detectSlantedEdges(
   imageSource: CanvasImageSource,
@@ -28,8 +25,8 @@ export function detectSlantedEdges(
   // 1. 划分候选检测网格 (5x5 区域采样)
   const cols = 5;
   const rows = 5;
-  const boxW = Math.max(60, Math.min(220, Math.floor(imgW / 5)));
-  const boxH = Math.max(60, Math.min(220, Math.floor(imgH / 5)));
+  const boxW = Math.min(imgW, Math.max(48, Math.min(180, Math.floor(imgW / 5))));
+  const boxH = Math.min(imgH, Math.max(48, Math.min(180, Math.floor(imgH / 5))));
 
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
@@ -62,39 +59,17 @@ export function detectSlantedEdges(
 
   candidateRois.forEach((cand, idx) => {
     try {
-      const { gray, width, height } = extractLinearGrayscale(imageSource, cand.roi);
-      const fitted = fitSlantedEdge(gray, width, height);
-      if (!fitted) return;
-
-      // 角度适宜性过滤 (建议倾角在 3° ~ 30°)
-      if (fitted.angleDeg < 2 || fitted.angleDeg > 35) return;
-
-      // 对比度过滤
-      if (fitted.contrast < 0.12) return;
-
-      // 计算 MTF50
-      const { lsf } = buildEsfAndLsf(
-        gray,
-        width,
-        height,
-        fitted.k,
-        fitted.b,
-        fitted.isVertical,
-        4,
-        128
-      );
-      const { mtf50 } = computeMtfFromLsf(lsf, 4, 64);
-
-      if (mtf50 > 0.05 && mtf50 <= 0.8) {
+      const measured = analyzeMtf(imageSource, cand.roi);
+      if (measured.isValid) {
         detected.push({
           id: `edge_${idx}_${cand.zoneName}`,
           roi: cand.roi,
-          angleDeg: Math.round(fitted.angleDeg * 100) / 100,
-          isVertical: fitted.isVertical,
-          contrast: Math.round(fitted.contrast * 100) / 100,
-          mtf50: Math.round(mtf50 * 1000) / 1000,
+          angleDeg: Math.round(measured.angleDeg * 100) / 100,
+          isVertical: !!measured.isVerticalEdge,
+          contrast: 0,
+          mtf50: measured.mtf50,
           zoneName: cand.zoneName,
-          score: fitted.contrast * 0.6 + (fitted.validRowCount / fitted.totalRows) * 0.4,
+          score: 1 / (1 + (measured.fitResidualPx || 0)),
         });
       }
     } catch {

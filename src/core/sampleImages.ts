@@ -1,3 +1,5 @@
+import { generateSyntheticSlantedEdge } from './synthetic.ts';
+
 /**
  * 预设样张生成器，供用户免上传一键体验各种镜头与场景的光学成像质量评估
  */
@@ -243,11 +245,19 @@ export async function generateSyntheticLandscapeScene(w = 1200, h = 800): Promis
   return canvasToImage(canvas);
 }
 
+export const SLANTED_EDGE_PRESET: SamplePreset = {
+  id: 'slanted_edge',
+  name: '合成斜边演示',
+  description: '5.7° 单一直斜边，用于体验局部 MTF 测量；不代表真实镜头',
+  generator: () => generateSyntheticSlantedEdge(),
+};
+
 export const SAMPLE_PRESETS: SamplePreset[] = [
+  SLANTED_EDGE_PRESET,
   {
     id: 'iso_chart',
-    name: 'ISO 12233 标板样张',
-    description: '标准测试靶标，包含中心/边角斜边与高频条纹',
+    name: '综合靶标演示',
+    description: '合成几何靶标，包含斜边与条纹；不是标准认证标板',
     generator: () => generateSyntheticIsoChart(1200, 800),
   },
   {

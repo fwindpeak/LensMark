@@ -1,103 +1,19 @@
-export interface EsfLsfData {
-  esf: number[];
-  lsf: number[];
-  oversampling: number;
-  winLen: number;
-}
 
-/**
- * 依据拟合斜边直线构建 4 倍超采样 ESF，并求导加窗生成 LSF
- * 支持近垂直 (isVertical = true) 与近水平 (isVertical = false) 两种投影
- */
-export function buildEsfAndLsf(
-  gray: Float64Array,
-  width: number,
-  height: number,
-  k: number,
-  b: number,
-  isVertical = true,
-  oversampling = 4,
-  winLen = 128
-): EsfLsfData {
-  const maxDim = isVertical ? width : height;
-  const maxDist = Math.floor(maxDim / 2);
-  const numBins = maxDist * 2 * oversampling;
-  const binsSum = new Float64Array(numBins);
-  const binsCount = new Int32Array(numBins);
-
-  const cosTheta = Math.cos(Math.atan(k));
-
-  if (isVertical) {
-    // 垂直斜边：按行遍历，计算水平距离
-    for (let y = 0; y < height; y++) {
-      const edgeX = k * y + b;
-      const rowOffset = y * width;
-      for (let x = 0; x < width; x++) {
-        const dist = (x - edgeX) * cosTheta;
-        const binIdx = Math.floor((dist + maxDist) * oversampling);
-        if (binIdx >= 0 && binIdx < numBins) {
-          binsSum[binIdx] += gray[rowOffset + x];
-          binsCount[binIdx]++;
-        }
-      }
-    }
-  } else {
-    // 水平斜边：按列遍历，计算垂直距离
-    for (let x = 0; x < width; x++) {
-      const edgeY = k * x + b;
-      for (let y = 0; y < height; y++) {
-        const dist = (y - edgeY) * cosTheta;
-        const binIdx = Math.floor((dist + maxDist) * oversampling);
-        if (binIdx >= 0 && binIdx < numBins) {
-          binsSum[binIdx] += gray[y * width + x];
-          binsCount[binIdx]++;
-        }
-      }
-    }
+export function buildEsfAndLsf(gray: Float64Array, width: number, height: number, k: number, b: number, isVertical = true, oversampling = 4, winLen = 256) {
+  const radius = 16, numBins = 2 * radius * oversampling;
+  const sums = new Float64Array(numBins), counts = new Uint32Array(numBins);
+  const normal = Math.sqrt(1 + k * k);
+  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+    const distance = (isVertical ? x - k * y - b : y - k * x - b) / normal;
+    const bin = Math.floor((distance + radius) * oversampling);
+    if (bin >= 0 && bin < numBins) { sums[bin] += gray[y * width + x]; counts[bin]++; }
   }
-
-  // 归一化并线性/就近补齐空缺 Bin
-  const esf: number[] = [];
-  for (let i = 0; i < numBins; i++) {
-    if (binsCount[i] > 0) {
-      esf.push(binsSum[i] / binsCount[i]);
-    } else if (esf.length > 0) {
-      esf.push(esf[esf.length - 1]);
-    } else {
-      esf.push(0);
-    }
-  }
-
-  // 差分求导获取 LSF (Line Spread Function)
-  const lsfLen = esf.length - 1;
-  const lsfRaw = new Float64Array(lsfLen);
-  let lsfMaxIdx = 0;
-  let maxVal = -Infinity;
-
-  for (let i = 0; i < lsfLen; i++) {
-    lsfRaw[i] = Math.abs(esf[i + 1] - esf[i]);
-    if (lsfRaw[i] > maxVal) {
-      maxVal = lsfRaw[i];
-      lsfMaxIdx = i;
-    }
-  }
-
-  // 裁剪以 LSF 峰值为中心的一段有效区域并施加汉宁窗 (Hanning Window)
-  const windowedLsf: number[] = new Array(winLen);
-  const halfWin = winLen / 2;
-
-  for (let i = 0; i < winLen; i++) {
-    const srcIdx = lsfMaxIdx - halfWin + i;
-    const rawVal = srcIdx >= 0 && srcIdx < lsfLen ? lsfRaw[srcIdx] : 0;
-    // 汉宁窗加权，平滑边缘截断效应
-    const w = 0.5 * (1 - Math.cos((2 * Math.PI * i) / (winLen - 1)));
-    windowedLsf[i] = rawVal * w;
-  }
-
-  return {
-    esf,
-    lsf: windowedLsf,
-    oversampling,
-    winLen,
-  };
+  if (Array.from(counts).some(c => c === 0)) throw new Error('斜边的亚像素采样覆盖不足，请扩大选区或调整倾角');
+  const esf = Array.from(sums, (sum, i) => sum / counts[i]);
+  // Keep the sign: abs(derivative) destroys ringing and noise response.
+  const raw = esf.slice(1).map((v, i) => v - esf[i]);
+  const lsf = new Array(winLen).fill(0);
+  const offset = Math.floor((winLen - raw.length) / 2);
+  for (let i = 0; i < raw.length; i++) lsf[i + offset] = raw[i] * 0.5 * (1 - Math.cos(2 * Math.PI * i / (raw.length - 1)));
+  return { esf, lsf, oversampling, winLen };
 }

@@ -1,4 +1,4 @@
-import LibRaw, { LibRawSettings } from 'libraw-wasm';
+import LibRaw, { type LibRawSettings } from 'libraw-wasm';
 import exifr from 'exifr';
 import { ParsedExifResult, ExifOverview } from '../types/exif';
 import { parsePhotoExif, formatExposureTime, estimateSensorFormat } from './exifReader';
@@ -44,6 +44,7 @@ export interface RawDecodeResult {
   height: number;
   exifResult: ParsedExifResult | null;
   decoderInfo: string;
+  sourceKind: 'raw_rendered' | 'raw_preview';
 }
 
 /**
@@ -95,7 +96,7 @@ function rawPixelsToImage(
       img.onerror = (err) => {
         reject(new Error('Failed to load decoded RAW canvas image: ' + err));
       };
-      img.src = canvas.toDataURL('image/jpeg', 0.98);
+      img.src = canvas.toDataURL('image/png');
     } catch (err) {
       reject(err);
     }
@@ -117,17 +118,18 @@ async function fallbackExtractRawPreview(
       const blobUrl = URL.createObjectURL(blob);
       const img = await new Promise<HTMLImageElement>((resolve, reject) => {
         const image = new Image();
-        image.onload = () => resolve(image);
-        image.onerror = (e) => reject(e);
+        image.onload = () => { URL.revokeObjectURL(blobUrl); resolve(image); };
+        image.onerror = (e) => { URL.revokeObjectURL(blobUrl); reject(e); };
         image.src = blobUrl;
       });
 
       return {
         image: img,
-        width: img.naturalWidth || 4000,
-        height: img.naturalHeight || 3000,
+        width: img.naturalWidth,
+        height: img.naturalHeight,
         exifResult: parsedExif,
-        decoderInfo: `RAW 内嵌全景预览流 (${img.naturalWidth}×${img.naturalHeight})`,
+        sourceKind: 'raw_preview',
+        decoderInfo: `RAW 内嵌 JPEG 预览 (${img.naturalWidth}×${img.naturalHeight})`,
       };
     }
   } catch (err) {
@@ -148,7 +150,7 @@ async function fallbackExtractRawPreview(
     if (bytes[i] === 0xff && bytes[i + 1] === 0xd8 && bytes[i + 2] === 0xff) {
       const startIndex = i;
       let j = startIndex + 4;
-      while (j < bytes.length - 1) {
+      while (j < scanLimit - 1) {
         if (bytes[j] === 0xff && bytes[j + 1] === 0xd9) {
           const length = j + 2 - startIndex;
           if (length > 80 * 1024 && length > maxJpegSize) {
@@ -168,8 +170,8 @@ async function fallbackExtractRawPreview(
     const blobUrl = URL.createObjectURL(largestJpegBlob);
     const img = await new Promise<HTMLImageElement>((resolve, reject) => {
       const image = new Image();
-      image.onload = () => resolve(image);
-      image.onerror = (e) => reject(e);
+      image.onload = () => { URL.revokeObjectURL(blobUrl); resolve(image); };
+      image.onerror = (e) => { URL.revokeObjectURL(blobUrl); reject(e); };
       image.src = blobUrl;
     });
 
@@ -178,7 +180,8 @@ async function fallbackExtractRawPreview(
       width: img.naturalWidth,
       height: img.naturalHeight,
       exifResult: parsedExif,
-      decoderInfo: `RAW 传感器直出原装预览 (${img.naturalWidth}×${img.naturalHeight})`,
+      sourceKind: 'raw_preview',
+      decoderInfo: `RAW 内嵌 JPEG 预览 (${img.naturalWidth}×${img.naturalHeight})`,
     };
   }
 
@@ -216,7 +219,7 @@ export async function decodeRawImage(
       raw = new LibRaw();
     } catch (workerErr) {
       console.warn('LibRaw Worker creation failed, falling back to embedded preview extraction:', workerErr);
-      onProgress?.('正在提取 RAW 格式高保真图像...', 60);
+      onProgress?.('解码不可用，正在尝试提取内嵌 JPEG 预览...', 60);
       return await fallbackExtractRawPreview(file, parsedExif);
     }
 
@@ -228,7 +231,8 @@ export async function decodeRawImage(
       outputColor: 1, // sRGB 色彩空间
       outputBps: 8, // 8-bit 输出
       halfSize: false, // 保持全尺寸传感器分辨率
-      noAutoBright: false, // 启用自适应亮度均衡
+      noAutoBright: true, // 固定亮度流程，避免逐图自动提亮
+      gamm: [2.4, 12.92], // sRGB 曲线；wrapper 将 power 转为倒数
       ...settings,
     };
 
@@ -249,7 +253,7 @@ export async function decodeRawImage(
         const focalLength = (otherObj?.focal_len || lensObj?.CurFocal || undefined) as number | undefined;
         const iso = otherObj?.iso_speed as number | undefined;
         const exposureTime = otherObj?.shutter as number | undefined;
-        const focalLengthIn35mm = (lensObj?.FocalLengthIn35mmFormat || (focalLength ? Math.round(focalLength * 1.5) : undefined)) as number | undefined;
+        const focalLengthIn35mm = (lensObj?.FocalLengthIn35mmFormat || undefined) as number | undefined;
 
         if (!parsedExif) {
           const overview: ExifOverview = {
@@ -315,11 +319,12 @@ export async function decodeRawImage(
       width: imgData.width,
       height: imgData.height,
       exifResult: parsedExif,
+      sourceKind: 'raw_rendered',
       decoderInfo: `LibRaw WebAssembly (${imgData.width}×${imgData.height}, ${imgData.bits}-bit)`,
     };
   } catch (decodeErr) {
     console.warn('LibRaw decoding encountered an error, falling back to embedded full preview:', decodeErr);
-    onProgress?.('正在提取相机 RAW 高清原真图像...', 60);
+    onProgress?.('RAW 解码失败，正在尝试提取内嵌 JPEG 预览...', 60);
     return await fallbackExtractRawPreview(file, parsedExif);
   } finally {
     // 释放 Worker 与 WebAssembly 内存
